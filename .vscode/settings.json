@@ -1,0 +1,5 @@
+{
+    "rust-analyzer.linkedProjects": [
+        "${workspaceFolder}/SonicSearch/src-tauri/Cargo.toml"
+    ]
+}
