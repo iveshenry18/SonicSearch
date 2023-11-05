@@ -1,5 +1,5 @@
 {
-  "name": "SonicSearch",
+  "name": "sonic-search",
   "version": "0.0.0",
   "description": "",
   "scripts": {
@@ -7,7 +7,9 @@
     "dev": "vite",
     "build": "vite build",
     "serve": "vite preview",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "tauri:build": "RUSTFLAGS='-L/opt/homebrew/opt/libomp/lib -L/opt/homebrew/opt/llvm/lib -lblas -llapack' tauri build",
+    "tauri:dev": "RUSTFLAGS='-L/opt/homebrew/opt/libomp/lib -L/opt/homebrew/opt/llvm/lib -lblas -llapack' tauri dev"
   },
   "license": "MIT",
   "dependencies": {

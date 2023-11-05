@@ -1,49 +1,39 @@
 // Prevents additional console window on Windows in release, DO NOT REMOVE!!
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use rusqlite::{ffi::sqlite3_auto_extension, Connection, Result};
-use sqlite_vss::{sqlite3_vector_init, sqlite3_vss_init};
+mod database;
+mod state;
 
-// Learn more about Tauri commands at https://tauri.app/v1/guides/features/command
-#[tauri::command]
-fn greet(name: &str) -> String {
-    format!("Hello, {}! You've been greeted from Rust!", name)
-}
+use database::{update_audio_file_index, get_search_results};
+use state::{AppState, ServiceAccess};
+use tauri::{State, Manager, AppHandle};
 
 #[tauri::command]
-fn search(name: &str) -> String {
-    format!(
-        "Thanks for searching for {}! I'm not gonna find it, but I'm glad you searched.",
-        name
-    )
-}
+fn search(app_handle: AppHandle, search_string: &str) -> Vec<String> {
+    println!("Searching for: {}", search_string);
+    // TODO: handle errors
+    let items = app_handle.db(|db| get_search_results(search_string, db)).unwrap();
 
-fn setup_db() -> Result<()> {
-    unsafe {
-        sqlite3_auto_extension(Some(sqlite3_vector_init));
-        sqlite3_auto_extension(Some(sqlite3_vss_init));
-    }
-
-    let conn = Connection::open("SonicSearch.db")?;
-
-    conn.execute(
-        "CREATE TABLE IF NOT EXISTS audio_file (
-            file_hash TEXT PRIMARY KEY,
-            file_path TEXT NOT NULL,            
-            embedding BLOB NOT NULL
-        )",
-        [],
-    )?;
-
-    Ok(())
+    items
 }
 
 fn main() {
-    setup_db().expect("Failed to setup database");
-
     tauri::Builder::default()
-        .invoke_handler(tauri::generate_handler![greet])
+        .manage(AppState {
+            db: Default::default(),
+        })
         .invoke_handler(tauri::generate_handler![search])
+        .setup(|app| {
+            let handle = app.handle();
+
+            let app_state: State<AppState> = handle.state();
+            let db = database::initialize_database(&handle)
+                .expect("Database initialization should succeed");
+            update_audio_file_index(&db).expect("Failed to update audio file index");
+            *app_state.db.lock().unwrap() = Some(db);
+
+            Ok(())
+        })
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

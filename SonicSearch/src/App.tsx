@@ -1,14 +1,35 @@
 import { createSignal } from "solid-js";
 import { invoke } from "@tauri-apps/api/tauri";
+import { Command } from "@tauri-apps/api/shell";
+import { basename } from "@tauri-apps/api/path";
 import "./App.css";
 
+type ProcessedSearchResult = {
+  fullPath: string;
+  basename: string;
+};
+
 function App() {
-  const [searchResult, setSearchResult] = createSignal("");
+  const [searchResults, setSearchResults] = createSignal<
+    ProcessedSearchResult[]
+  >([]);
   const [searchString, setSearchString] = createSignal("");
 
   async function search() {
     // Learn more about Tauri commands at https://tauri.app/v1/guides/features/command
-    setSearchResult(await invoke("search", { name: searchString() }));
+    const res = await invoke<string[]>("search", {
+      searchString: searchString(),
+    });
+    const processedRes = await Promise.all(
+      res.map(
+        async (fullPath) =>
+          ({
+            fullPath,
+            basename: await basename(fullPath),
+          } satisfies ProcessedSearchResult)
+      )
+    );
+    setSearchResults(processedRes);
   }
 
   return (
@@ -33,7 +54,27 @@ function App() {
         <button type="submit">Search</button>
       </form>
 
-      <p>{searchResult()}</p>
+      {searchResults().length > 0 && (
+        <div>
+          <ul>
+            {searchResults().map((searchResult) => (
+              <li>
+                <a
+                  onClick={(e) => {
+                    e.preventDefault();
+                    new Command("openInFinder", [
+                      "-R",
+                      searchResult.fullPath,
+                    ]).execute();
+                  }}
+                >
+                  {searchResult.basename}
+                </a>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
     </div>
   );
 }

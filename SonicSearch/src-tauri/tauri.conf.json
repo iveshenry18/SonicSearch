@@ -15,7 +15,17 @@
       "all": false,
       "shell": {
         "all": false,
-        "open": true
+        "execute": true,
+        "scope": [
+          {
+            "name": "openInFinder",
+            "cmd": "open",
+            "args": ["-R", { "validator": "^\/.*$"}]
+          }
+        ]
+      },
+      "path": {
+        "all": true
       }
     },
     "bundle": {
