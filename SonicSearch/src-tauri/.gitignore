@@ -3,3 +3,5 @@
 /target/
 
 /binaries/
+/resources/
+/onnx_models/

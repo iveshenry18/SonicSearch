@@ -30,7 +30,7 @@ fn main() {
 
             let app_state: State<AppState> = handle.state();
 
-            let clap_model = clap::load_clap_model().expect("Failed to load clap model");
+            let clap_model = clap::load_clap_model(&app.path_resolver()).expect("Failed to load clap model");
             let db = database::initialize_database(&handle)
                 .expect("Database initialization should succeed");
 

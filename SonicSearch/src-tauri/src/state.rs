@@ -1,12 +1,12 @@
 use std::sync::Mutex;
 
+use ort::Session;
 use rusqlite::Connection;
 use tauri::{AppHandle, Manager, State};
-use tch::CModule;
 
 pub struct AppState {
     pub db: Mutex<Option<Connection>>,
-    pub clap_model: Mutex<Option<CModule>>,
+    pub clap_model: Mutex<Option<Session>>,
 }
 
 pub trait ServiceAccess {

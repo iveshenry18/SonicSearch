@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "vite build",
     "serve": "vite preview",
-    "tauri": "RUSTFLAGS='-L/opt/homebrew/opt/pytorch/lib -L/opt/homebrew/opt/libomp/lib -L/opt/homebrew/opt/llvm/lib -lblas -llapack' tauri"
+    "tauri": "ORT_DYLIB_PATH='/opt/homebrew/Cellar/onnxruntime/1.16.1/lib/libonnxruntime.dylib' RUSTFLAGS='-L/opt/homebrew/opt/pytorch/lib -L/opt/homebrew/opt/libomp/lib -L/opt/homebrew/opt/llvm/lib -lblas -llapack' tauri"
   },
   "license": "MIT",
   "dependencies": {

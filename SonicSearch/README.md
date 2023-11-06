@@ -9,5 +9,10 @@ A search engine for your sounds.
 
 
 ### Building
-We use [tch-rs](https://github.com/LaurentMazare/tch-rs), which depends on PyTorch. Here's what I did (among other things):
-1. Installed PyTorch using Homebrew: `brew install pytorch`
+This app isn't exactly... portable yet. For now you need at least a few binaries. At present, the `package.json` includes env variables that assume you're running MacOS and have these installed in the same place I do... :)
+
+1. onnxruntime: `brew install onnxruntime`
+1. libomp: `brew install libomp`
+1. llvm: `brew install llvm`
+
+You'll also need to create the appropriate onnx models to populate the `SonicSearch/src-tauri/onnx_models` directory. That should be achievable simply by running all cells of `clap_export/clap_export.ipynb`.

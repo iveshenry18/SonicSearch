@@ -1,13 +1,26 @@
 use anyhow::Result;
-use hf_hub::api::sync::Api;
-use tch::CModule;
+use ort::{
+    Environment,
+    ExecutionProvider::{CoreML, CPU, CUDA},
+    GraphOptimizationLevel, Session, SessionBuilder,
+};
+use tauri::PathResolver;
 
-pub fn load_clap_model() -> Result<tch::CModule> {
-    let api = Api::new().unwrap();
-    let repo = api.model("lukewys/laion_clap".to_string());
-    let model_file = repo.download("music_audioset_epoch_15_esc_90.14.pt").unwrap();
+pub fn load_clap_model(path_resolver: &PathResolver) -> Result<Session> {
+    let environment = Environment::builder()
+        .with_execution_providers(vec![
+            CUDA(Default::default()),
+            CoreML(Default::default()),
+            CPU(Default::default()),
+        ])
+        .with_name("CLAP")
+        .build()?
+        .into_arc();
+    let model_path = path_resolver.resolve_resource("onnx_models/laion_clap_htsat_unfused.onnx").expect("Model path should resolve");
 
-    let model = CModule::load(model_file).unwrap();
+    let session = SessionBuilder::new(&environment)?
+        .with_optimization_level(GraphOptimizationLevel::Disable)?
+        .with_model_from_file(model_path)?;
 
-    Ok(model)
+    Ok(session)
 }
