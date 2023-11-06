@@ -1,0 +1,9 @@
+name: sonic-search-tch-rs-reqs
+channels:
+  - pytorch
+  - conda-forge
+dependencies:
+  - python=3.10
+  - pytorch
+  - torchvision
+  - torchaudio

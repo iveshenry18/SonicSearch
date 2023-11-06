@@ -20,7 +20,12 @@
           {
             "name": "openInFinder",
             "cmd": "open",
-            "args": ["-R", { "validator": "^\/.*$"}]
+            "args": [
+              "-R",
+              {
+                "validator": "^\/.*$"
+              }
+            ]
           }
         ]
       },

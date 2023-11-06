@@ -3,6 +3,7 @@
 
 mod database;
 mod state;
+mod clap;
 
 use database::{update_audio_file_index, get_search_results};
 use state::{AppState, ServiceAccess};
@@ -21,16 +22,21 @@ fn main() {
     tauri::Builder::default()
         .manage(AppState {
             db: Default::default(),
+            clap_model: Default::default(),
         })
         .invoke_handler(tauri::generate_handler![search])
         .setup(|app| {
             let handle = app.handle();
 
             let app_state: State<AppState> = handle.state();
+
+            let clap_model = clap::load_clap_model().expect("Failed to load clap model");
             let db = database::initialize_database(&handle)
                 .expect("Database initialization should succeed");
+
             update_audio_file_index(&db).expect("Failed to update audio file index");
             *app_state.db.lock().unwrap() = Some(db);
+            *app_state.clap_model.lock().unwrap() = Some(clap_model);
 
             Ok(())
         })
