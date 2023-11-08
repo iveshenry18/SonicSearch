@@ -157,32 +157,7 @@ class ClapFeatureExtractor(SequenceFeatureExtractor):
         )
         return log_mel_spectrogram.T
 
-    def _random_mel_fusion(self, mel, total_frames, chunk_frames):
-        ranges = np.array_split(list(range(0, total_frames - chunk_frames + 1)), 3)
-        if len(ranges[1]) == 0:
-            # if the audio is too short, we just use the first chunk
-            ranges[1] = [0]
-        if len(ranges[2]) == 0:
-            # if the audio is too short, we just use the first chunk
-            ranges[2] = [0]
-        # randomly choose index for each part
-        idx_front = np.random.choice(ranges[0])
-        idx_middle = np.random.choice(ranges[1])
-        idx_back = np.random.choice(ranges[2])
-
-        mel_chunk_front = mel[idx_front : idx_front + chunk_frames, :]
-        mel_chunk_middle = mel[idx_middle : idx_middle + chunk_frames, :]
-        mel_chunk_back = mel[idx_back : idx_back + chunk_frames, :]
-
-        mel = torch.tensor(mel[None, None, :])
-        mel_shrink = torch.nn.functional.interpolate(
-            mel, size=[chunk_frames, 64], mode="bilinear", align_corners=False
-        )
-        mel_shrink = mel_shrink[0][0].numpy()
-        mel_fusion = np.stack([mel_shrink, mel_chunk_front, mel_chunk_middle, mel_chunk_back], axis=0)
-        return mel_fusion
-
-    def _get_input_mel(self, waveform: np.array, max_length, truncation, padding) -> np.array:
+    def _get_input_mel(self, waveform: np.array, max_length) -> np.array:
         """
         Extracts the mel spectrogram and prepares it for the mode based on the `truncation` and `padding` arguments.
         Four different path are possible:
@@ -197,54 +172,21 @@ class ClapFeatureExtractor(SequenceFeatureExtractor):
               spectrogram will be computed on a random crop of the waveform.
 
         """
-        if waveform.shape[0] > max_length:
-            if truncation == "rand_trunc":
-                longer = True
-                # random crop to max_length (for compatibility) -> this should be handled by self.pad
-                overflow = len(waveform) - max_length
-                idx = np.random.randint(0, overflow + 1)
-                waveform = waveform[idx : idx + max_length]
-                input_mel = self._np_extract_fbank_features(waveform, self.mel_filters_slaney)[None, :]
-            elif truncation == "fusion":
-                mel = self._np_extract_fbank_features(waveform, self.mel_filters)
-                chunk_frames = max_length // self.hop_length + 1  # the +1 related to how the spectrogram is computed
-                total_frames = mel.shape[0]
-                if chunk_frames == total_frames:
-                    # there is a corner case where the audio length is larger than max_length but smaller than max_length+hop_length.
-                    # In this case, we just use the whole audio.
-                    input_mel = np.stack([mel, mel, mel, mel], axis=0)
-                    longer = False
-                else:
-                    input_mel = self._random_mel_fusion(mel, total_frames, chunk_frames)
-                    longer = True
-            else:
-                raise NotImplementedError(f"data_truncating {truncation} not implemented")
+        
 
-        else:
-            longer = False
-            # only use repeat as a new possible value for padding. you repeat the audio before applying the usual max_length padding
-            if waveform.shape[0] < max_length:
-                if padding == "repeat":
-                    n_repeat = int(max_length / len(waveform))
-                    waveform = np.stack(np.tile(waveform, n_repeat + 1))[:max_length]
-                if padding == "repeatpad":
-                    n_repeat = int(max_length / len(waveform))
-                    waveform = np.stack(np.tile(waveform, n_repeat))
-                waveform = np.pad(waveform, (0, max_length - waveform.shape[0]), mode="constant", constant_values=0)
+        # only use repeat as a new possible value for padding. you repeat the audio before applying the usual max_length padding
+        if waveform.shape[0] < max_length:
+            n_repeat = int(max_length / len(waveform))
+            waveform = np.stack(np.tile(waveform, n_repeat))
+            waveform = np.pad(waveform, (0, max_length - waveform.shape[0]), mode="constant", constant_values=0)
 
-            if truncation == "fusion":
-                input_mel = self._np_extract_fbank_features(waveform, self.mel_filters)
-                input_mel = np.stack([input_mel, input_mel, input_mel, input_mel], axis=0)
-            else:
-                input_mel = self._np_extract_fbank_features(waveform, self.mel_filters_slaney)[None, :]
+        input_mel = self._np_extract_fbank_features(waveform, self.mel_filters_slaney)[None, :]
 
-        return input_mel, longer
+        return input_mel
 
     def __call__(
         self,
         raw_speech: List[np.ndarray],
-        truncation: str = "rand_trunc",
-        padding: Optional[str] = "repeatpad",
         sampling_rate: Optional[int] = 48000,
     ) -> BatchFeature:
         """
@@ -255,40 +197,31 @@ class ClapFeatureExtractor(SequenceFeatureExtractor):
                 The sequence or batch of sequences to be padded. Each sequence can be a numpy array, a list of float
                 values, a list of numpy arrays or a list of list of float values. Must be mono channel audio, not
                 stereo, i.e. single float per timestep.
-            truncation (`str`, *optional*):
-                Truncation pattern for long audio inputs. Two patterns are available:
-                    - `fusion` will use `_random_mel_fusion`, which stacks 3 random crops from the mel spectrogram and
-                      a downsampled version of the entire mel spectrogram.
-                If `config.fusion` is set to True, shorter audios also need to to return 4 mels, which will just be a
-                copy of the original mel obtained from the padded audio.
-                    - `rand_trunc` will select a random crop of the mel spectrogram.
-            padding (`str`, *optional*):
-               Padding pattern for shorter audio inputs. Three patterns were originally implemented:
-                    - `repeatpad`: the audio is repeated, and then padded to fit the `max_length`.
             sampling_rate (`int`, *optional*):
                 The sampling rate at which the `raw_speech` input was sampled. It is strongly recommended to pass
                 `sampling_rate` at the forward call to prevent silent errors and allow automatic speech recognition
                 pipeline.
         """
         truncation = self.truncation # rand_trunc
-        padding = self.padding
-        max_length = self.max_length_s * self.sampling_rate
-        assert sampling_rate == self.sampling_rate
+        padding = self.padding # repeatpad
+        max_length = self.max_length_s * self.sampling_rate # 48000
+        assert sampling_rate == self.sampling_rate # 48000
         # Assert that raw_speech is a list of waveforms (= np.ndarray of float64)
         assert isinstance(raw_speech, list)
-        assert isinstance(raw_speech[0], np.ndarray)
+        assert all(isinstance(waveform, np.ndarray) for waveform in raw_speech)
+        assert all(waveform.length >= max_length for waveform in raw_speech)
 
         # convert to mel spectrogram, truncate and pad if needed.
         padded_inputs = [
-            self._get_input_mel(waveform, max_length, truncation, padding)
+            self._get_input_mel(waveform, max_length)
             for waveform in raw_speech
         ]
 
         input_mel = []
         is_longer = []
-        for mel, longer in padded_inputs:
+        for mel in padded_inputs:
             input_mel.append(mel)
-            is_longer.append(longer)
+            is_longer.append(False)
 
         if isinstance(input_mel[0], List):
             input_mel = [np.asarray(feature, dtype=np.float64) for feature in input_mel]
@@ -298,8 +231,5 @@ class ClapFeatureExtractor(SequenceFeatureExtractor):
 
         input_features = {"input_features": input_mel, "is_longer": is_longer}
         input_features = BatchFeature(input_features)
-
-        if return_tensors is not None:
-            input_features = input_features.convert_to_tensors(return_tensors)
 
         return input_features

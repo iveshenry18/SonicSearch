@@ -33,14 +33,14 @@ fn main() {
 
             let app_state: State<AppState> = handle.state();
 
-            let (clap_model_text_embedder, clap_model_audio_embedder) =
-                clap::load_clap_models(&app.path_resolver()).expect("Failed to load clap model");
+            // let (clap_model_text_embedder, clap_model_audio_embedder) =
+            //     clap::load_clap_models(&app.path_resolver()).expect("Failed to load clap model");
             let db = database::initialize_database(&handle)
                 .expect("Database initialization should succeed");
 
             *app_state.db.lock().unwrap() = Some(db);
-            *app_state.clap_model_text_embedder.lock().unwrap() = Some(clap_model_text_embedder);
-            *app_state.clap_model_audio_embedder.lock().unwrap() = Some(clap_model_audio_embedder);
+            // *app_state.clap_model_text_embedder.lock().unwrap() = Some(clap_model_text_embedder);
+            // *app_state.clap_model_audio_embedder.lock().unwrap() = Some(clap_model_audio_embedder);
 
             update_audio_file_index(
                 app_state
