@@ -2,5 +2,6 @@
     "rust-analyzer.linkedProjects": [
         "${workspaceFolder}/SonicSearch/src-tauri/Cargo.toml"
     ],
-    "editor.inlayHints.enabled": "offUnlessPressed"
+    "editor.inlayHints.enabled": "offUnlessPressed",
+    "jupyter.debugJustMyCode": false
 }

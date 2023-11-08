@@ -6,7 +6,7 @@ use ort::{
 };
 use tauri::PathResolver;
 
-pub fn load_clap_model(path_resolver: &PathResolver) -> Result<Session> {
+pub fn load_clap_models(path_resolver: &PathResolver) -> Result<(Session, Session)> {
     let environment = Environment::builder()
         .with_execution_providers(vec![
             CUDA(Default::default()),
@@ -16,11 +16,47 @@ pub fn load_clap_model(path_resolver: &PathResolver) -> Result<Session> {
         .with_name("CLAP")
         .build()?
         .into_arc();
-    let model_path = path_resolver.resolve_resource("onnx_models/laion_clap_htsat_unfused.onnx").expect("Model path should resolve");
 
-    let session = SessionBuilder::new(&environment)?
+    let text_embedder_model_filename =
+        "onnx_models/laion_clap_htsat_unfused_get_text_features.onnx";
+    let text_embedder_model_path = path_resolver
+        .resolve_resource(text_embedder_model_filename)
+        .expect(
+            format!(
+                "Model path {} should resolve.",
+                text_embedder_model_filename,
+            )
+            .as_str(),
+        );
+    let text_embedder_session = SessionBuilder::new(&environment)?
         .with_optimization_level(GraphOptimizationLevel::Disable)?
-        .with_model_from_file(model_path)?;
+        .with_model_from_file(text_embedder_model_path)
+        .expect(&format!(
+            "Failed to load text embedder model from {}",
+            text_embedder_model_filename,
+        ));
 
-    Ok(session)
+    let audio_embedder_model_filename =
+        "onnx_models/laion_clap_htsat_unfused_get_audio_features.onnx";
+    let audio_embedder_model_path = path_resolver
+        .resolve_resource(audio_embedder_model_filename)
+        .expect(
+            format!(
+                "Model path {} should resolve.",
+                audio_embedder_model_filename,
+            )
+            .as_str(),
+        );
+    let audio_embedder_session = SessionBuilder::new(&environment)?
+        .with_optimization_level(GraphOptimizationLevel::Disable)?
+        .with_model_from_file(audio_embedder_model_path)
+        .expect(
+            format!(
+                "Failed to load audio embedder model from {}",
+                audio_embedder_model_filename,
+            )
+            .as_str(),
+        );
+
+    Ok((text_embedder_session, audio_embedder_session))
 }

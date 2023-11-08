@@ -6,7 +6,8 @@ use tauri::{AppHandle, Manager, State};
 
 pub struct AppState {
     pub db: Mutex<Option<Connection>>,
-    pub clap_model: Mutex<Option<Session>>,
+    pub clap_model_text_embedder: Mutex<Option<Session>>,
+    pub clap_model_audio_embedder: Mutex<Option<Session>>,
 }
 
 pub trait ServiceAccess {
