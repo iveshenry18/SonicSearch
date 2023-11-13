@@ -1,0 +1,8 @@
+# NOTE: This is respected when running `cargo` commands, but is overwritten by Tauri when running `bun run tauri` commands.
+# For this reason, this data is _also_ set in package.json
+
+[env]
+ORT_DYLIB_PATH='/opt/homebrew/Cellar/onnxruntime/1.16.1/lib/libonnxruntime.dylib'
+
+[build]
+rustflags = ['-L/opt/homebrew/opt/libomp/lib', '-L/opt/homebrew/opt/llvm/lib', '-lblas', '-llapack']

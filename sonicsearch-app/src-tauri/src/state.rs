@@ -1,45 +1,47 @@
 use std::sync::Mutex;
 
 use ort::Session;
-use rusqlite::Connection;
-use tauri::{AppHandle, Manager, State};
+use sqlx::SqlitePool;
 
 pub struct AppState {
-    pub db: Mutex<Option<Connection>>,
-    pub clap_model_text_embedder: Mutex<Option<Session>>,
-    pub clap_model_audio_embedder: Mutex<Option<Session>>,
+    pub pool: SqlitePool,
+    pub clap_model_text_embedder: Mutex<Session>,
+    pub clap_model_audio_embedder: Mutex<Session>,
+    pub is_indexing: Mutex<bool>,
 }
 
-pub trait ServiceAccess {
-    fn db<F, TResult>(&self, operation: F) -> TResult
-    where
-        F: FnOnce(&Connection) -> TResult;
+// For reference... later
 
-    fn db_mut<F, TResult>(&self, operation: F) -> TResult
-    where
-        F: FnOnce(&mut Connection) -> TResult;
-}
+// pub trait ServiceAccess {
+//     fn db<F, TResult>(&self, operation: F) -> TResult
+//     where
+//         F: FnOnce(&SqlitePool) -> TResult;
 
-impl ServiceAccess for AppHandle {
-    fn db<F, TResult>(&self, operation: F) -> TResult
-    where
-        F: FnOnce(&Connection) -> TResult,
-    {
-        let app_state: State<AppState> = self.state();
-        let db_connection_guard = app_state.db.lock().unwrap();
-        let db = db_connection_guard.as_ref().unwrap();
+//     fn db_mut<F, TResult>(&self, operation: F) -> TResult
+//     where
+//         F: FnOnce(&mut SqlitePool) -> TResult;
+// }
 
-        operation(db)
-    }
+// impl ServiceAccess for AppHandle {
+//     fn db<F, TResult>(&self, operation: F) -> TResult
+//     where
+//         F: FnOnce(&SqlitePool) -> TResult,
+//     {
+//         let app_state: State<AppState> = self.state();
+//         let db_connection_guard = app_state.pool.lock().unwrap();
+//         let db = db_connection_guard.as_ref().unwrap();
 
-    fn db_mut<F, TResult>(&self, operation: F) -> TResult
-    where
-        F: FnOnce(&mut Connection) -> TResult,
-    {
-        let app_state: State<AppState> = self.state();
-        let mut db_connection_guard = app_state.db.lock().unwrap();
-        let db = db_connection_guard.as_mut().unwrap();
+//         operation(db)
+//     }
 
-        operation(db)
-    }
-}
+//     fn db_mut<F, TResult>(&self, operation: F) -> TResult
+//     where
+//         F: FnOnce(&mut SqlitePool) -> TResult,
+//     {
+//         let app_state: State<AppState> = self.state();
+//         let mut db_connection_guard = app_state.pool.lock().unwrap();
+//         let db = db_connection_guard.as_mut().unwrap();
+
+//         operation(db)
+//     }
+// }

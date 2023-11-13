@@ -1,59 +1,49 @@
 // Prevents additional console window on Windows in release, DO NOT REMOVE!!
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod audio_index;
 mod clap;
 mod database;
 mod state;
 
-use database::{get_search_results, update_audio_file_index};
-use state::{AppState, ServiceAccess};
-use tauri::{AppHandle, Manager, State};
+use std::sync::Mutex;
+
+use audio_index::{get_search_results, update_audio_index};
+use sqlx::SqlitePool;
+use state::AppState;
+use tauri::Manager;
 
 #[tauri::command]
-fn search(app_handle: AppHandle, search_string: &str) -> Vec<String> {
+fn search(app_state: tauri::State<AppState>, search_string: &str) -> Result<Vec<String>, String> {
     println!("Searching for: {}", search_string);
-    // TODO: handle errors
-    let items = app_handle
-        .db(|db| get_search_results(search_string, db))
-        .unwrap();
-
-    items
+    get_search_results(
+        search_string,
+        &app_state.pool.clone()
+    )
+    .or(Err("Failed to search".into()))
 }
 
 fn main() {
     tauri::Builder::default()
-        .manage(AppState {
-            db: Default::default(),
-            clap_model_audio_embedder: Default::default(),
-            clap_model_text_embedder: Default::default(),
-        })
         .invoke_handler(tauri::generate_handler![search])
         .setup(|app| {
             let handle = app.handle();
 
-            let app_state: State<AppState> = handle.state();
+            let (clap_model_text_embedder, clap_model_audio_embedder) =
+                clap::load_clap_models(&app.path_resolver()).expect("Failed to load clap model");
 
-            // let (clap_model_text_embedder, clap_model_audio_embedder) =
-            //     clap::load_clap_models(&app.path_resolver()).expect("Failed to load clap model");
-            let db = database::initialize_database(&handle)
-                .expect("Database initialization should succeed");
-
-            *app_state.db.lock().unwrap() = Some(db);
-            // *app_state.clap_model_text_embedder.lock().unwrap() = Some(clap_model_text_embedder);
-            // *app_state.clap_model_audio_embedder.lock().unwrap() = Some(clap_model_audio_embedder);
-
-            update_audio_file_index(
-                app_state
-                    .db
-                    .lock()
-                    .unwrap()
-                    .as_ref()
-                    .expect("Could not access db to update audio file index"),
-            )
-            .expect("Failed to update audio file index");
+            let pool: SqlitePool = tauri::async_runtime::block_on(database::initialize_database(&handle))?;
+            
+            app.manage(AppState {
+                pool,
+                clap_model_audio_embedder: Mutex::new(clap_model_audio_embedder),
+                clap_model_text_embedder: Mutex::new(clap_model_text_embedder),
+                is_indexing: Mutex::new(false)
+            });
 
             Ok(())
         })
+        .invoke_handler(tauri::generate_handler![search, update_audio_index])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

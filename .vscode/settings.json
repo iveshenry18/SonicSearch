@@ -1,7 +1,8 @@
 {
     "rust-analyzer.linkedProjects": [
-        "${workspaceFolder}/SonicSearch/src-tauri/Cargo.toml"
+        "${workspaceFolder}/sonicsearch-app/src-tauri/Cargo.toml"
     ],
+    "rust-analyzer.check.command": "clippy",
     "editor.inlayHints.enabled": "offUnlessPressed",
     "jupyter.debugJustMyCode": false
 }
