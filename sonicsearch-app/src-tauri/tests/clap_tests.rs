@@ -6,7 +6,9 @@ mod tests {
         let audio_input = vec![0.0; 48000 * 10]; // Placeholder for actual audio input
         let mel_spectrogram = generate_mel_spectrogram(audio_input, 48000);
         assert_eq!(mel_spectrogram.len(), 64); // Assuming 64 Mel bands
-        assert!(mel_spectrogram.iter().all(|band| band.len() == expected_length)); // Replace expected_length with the actual expected length
+        assert!(mel_spectrogram
+            .iter()
+            .all(|band| band.len() == expected_length)); // Replace expected_length with the actual expected length
     }
 
     #[test]
@@ -15,7 +17,7 @@ mod tests {
         let text_input = "Test input for tokenizer.";
         let tokens = tokenize_text(text_input);
         assert!(tokens.len() > 0); // Ensure some tokens are generated
-        // You can also assert specific expected shapes if you know the expected number of tokens
+                                   // You can also assert specific expected shapes if you know the expected number of tokens
     }
 
     #[test]

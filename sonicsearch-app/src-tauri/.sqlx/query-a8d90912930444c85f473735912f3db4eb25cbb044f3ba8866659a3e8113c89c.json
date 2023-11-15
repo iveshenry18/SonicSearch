@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO audio_file_segment (file_hash, starting_timestamp, embedding) VALUES (?, ?, ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": []
+  },
+  "hash": "a8d90912930444c85f473735912f3db4eb25cbb044f3ba8866659a3e8113c89c"
+}

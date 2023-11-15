@@ -16,18 +16,36 @@ function App() {
   const [searchString, setSearchString] = createSignal("");
   const [indexIsReady, setIndexIsReady] = createSignal(false);
   const [refreshCount, setRefreshCount] = createSignal(0);
+  const [resetCount, setResetCount] = createSignal(0);
+
+  async function updateAudioIndex() {
+    const res = await invoke("update_audio_index");
+    console.debug(res);
+    setIndexIsReady(true);
+  }
 
   createEffect(() => {
-    async function updateAudioIndex() {
-      const res = await invoke("update_audio_index");
-      console.debug(res);
-      setIndexIsReady(true);
-    }
-
     // This is a hack to force the app to refresh the index
     refreshCount();
     if (!indexIsReady()) {
       updateAudioIndex();
+    }
+  });
+
+  createEffect(() => {
+    async function resetAudioIndex() {
+      const res = await invoke("reset_audio_index");
+      console.debug(res);
+      setIndexIsReady(false);
+    }
+    
+    async function resetAndRefreshAudioIndex() {
+      await resetAudioIndex();
+      updateAudioIndex();
+    }
+
+    if (resetCount() > 0) {
+      resetAndRefreshAudioIndex();
     }
   });
 

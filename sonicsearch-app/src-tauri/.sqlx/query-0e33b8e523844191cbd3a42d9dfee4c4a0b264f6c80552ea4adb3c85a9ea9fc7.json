@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO audio_file (file_hash, file_path) VALUES (?, ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "0e33b8e523844191cbd3a42d9dfee4c4a0b264f6c80552ea4adb3c85a9ea9fc7"
+}

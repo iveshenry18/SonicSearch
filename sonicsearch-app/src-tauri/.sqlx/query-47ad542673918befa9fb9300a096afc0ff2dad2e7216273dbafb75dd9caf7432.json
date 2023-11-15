@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DROP TABLE IF EXISTS audio_file;",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": []
+  },
+  "hash": "47ad542673918befa9fb9300a096afc0ff2dad2e7216273dbafb75dd9caf7432"
+}

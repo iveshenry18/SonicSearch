@@ -17,6 +17,7 @@ pub async fn initialize_database(app_handle: &AppHandle) -> Result<SqlitePool> {
         .path_resolver()
         .app_data_dir()
         .expect("The app data directory should exist.");
+    println!("App data directory: {:?}", app_dir);
     fs::create_dir_all(&app_dir).expect("The app data directory should be created.");
 
     let sqlite_path = app_dir.join("SonicSearch.sqlite");
@@ -24,18 +25,24 @@ pub async fn initialize_database(app_handle: &AppHandle) -> Result<SqlitePool> {
         .await
         .context("Failed to open database")?;
 
-    sqlx::query(
+    sqlx::query!(r#"DROP TABLE IF EXISTS audio_file;"#,)
+        .execute(&pool)
+        .await?;
+    sqlx::query!(
         r#"CREATE TABLE IF NOT EXISTS audio_file (
-            file_hash TEXT PRIMARY KEY,
+            file_hash TEXT PRIMARY KEY NOT NULL,
             file_path TEXT NOT NULL
         )"#,
     )
     .execute(&pool)
     .await?;
 
+    sqlx::query(r#"DROP TABLE IF EXISTS audio_file_segment;"#)
+        .execute(&pool)
+        .await?;
     sqlx::query(
         r#"CREATE TABLE IF NOT EXISTS audio_file_segment (
-            file_hash TEXT,
+            file_hash TEXT NOT NULL,
             starting_timestamp REAL NOT NULL,            
             embedding BLOB NOT NULL,
             FOREIGN KEY (file_hash) REFERENCES audio_file(file_hash),

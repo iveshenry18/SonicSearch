@@ -6,7 +6,7 @@ mod clap;
 mod database;
 mod state;
 
-use std::sync::Mutex;
+use futures::lock::Mutex;
 
 use audio_index::{get_search_results, update_audio_index};
 use sqlx::SqlitePool;
@@ -16,11 +16,7 @@ use tauri::Manager;
 #[tauri::command]
 fn search(app_state: tauri::State<AppState>, search_string: &str) -> Result<Vec<String>, String> {
     println!("Searching for: {}", search_string);
-    get_search_results(
-        search_string,
-        &app_state.pool.clone()
-    )
-    .or(Err("Failed to search".into()))
+    get_search_results(search_string, &app_state.pool.clone()).or(Err("Failed to search".into()))
 }
 
 fn main() {
@@ -32,13 +28,14 @@ fn main() {
             let (clap_model_text_embedder, clap_model_audio_embedder) =
                 clap::load_clap_models(&app.path_resolver()).expect("Failed to load clap model");
 
-            let pool: SqlitePool = tauri::async_runtime::block_on(database::initialize_database(&handle))?;
-            
+            let pool: SqlitePool =
+                tauri::async_runtime::block_on(database::initialize_database(&handle))?;
+
             app.manage(AppState {
                 pool,
                 clap_model_audio_embedder: Mutex::new(clap_model_audio_embedder),
                 clap_model_text_embedder: Mutex::new(clap_model_text_embedder),
-                is_indexing: Mutex::new(false)
+                is_indexing: Mutex::new(false),
             });
 
             Ok(())

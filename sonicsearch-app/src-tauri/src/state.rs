@@ -1,4 +1,4 @@
-use std::sync::Mutex;
+use futures::lock::Mutex;
 
 use ort::Session;
 use sqlx::SqlitePool;
