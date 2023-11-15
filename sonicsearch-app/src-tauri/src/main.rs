@@ -25,7 +25,7 @@ fn search(app_state: tauri::State<AppState>, search_string: &str) -> Result<Vec<
 
 fn main() {
     tauri::Builder::default()
-        .invoke_handler(tauri::generate_handler![search])
+        .invoke_handler(tauri::generate_handler![search, update_audio_index])
         .setup(|app| {
             let handle = app.handle();
 

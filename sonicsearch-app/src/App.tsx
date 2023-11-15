@@ -1,4 +1,4 @@
-import { createSignal } from "solid-js";
+import { createEffect, createSignal } from "solid-js";
 import { invoke } from "@tauri-apps/api/tauri";
 import { Command } from "@tauri-apps/api/shell";
 import { basename } from "@tauri-apps/api/path";
@@ -14,6 +14,22 @@ function App() {
     ProcessedSearchResult[]
   >([]);
   const [searchString, setSearchString] = createSignal("");
+  const [indexIsReady, setIndexIsReady] = createSignal(false);
+  const [refreshCount, setRefreshCount] = createSignal(0);
+
+  createEffect(() => {
+    async function updateAudioIndex() {
+      const res = await invoke("update_audio_index");
+      console.debug(res);
+      setIndexIsReady(true);
+    }
+
+    // This is a hack to force the app to refresh the index
+    refreshCount();
+    if (!indexIsReady()) {
+      updateAudioIndex();
+    }
+  });
 
   async function search() {
     // Learn more about Tauri commands at https://tauri.app/v1/guides/features/command
@@ -37,6 +53,9 @@ function App() {
       <div class="title">
         <h1>SonicSearch</h1>
         <h2>a search engine for your sounds</h2>
+        <button onClick={() => setRefreshCount(refreshCount() + 1)}>
+          <p>Refresh Index</p>
+        </button>
       </div>
 
       <form

@@ -47,35 +47,28 @@ fn is_audio_file(path: &Path) -> bool {
 }
 
 #[tauri::command]
-pub async fn update_audio_index(app_state: State<'_, AppState>) -> result::Result<(), ()> {
+pub async fn update_audio_index(app_state: State<'_, AppState>) ->  result::Result<bool, usize> {
     println!("Updating audio file index...");
     let user_audio_dir = dirs::audio_dir().expect("Failed to get user home directory");
 
     let upsert_futures: Vec<_> = WalkDir::new(user_audio_dir)
         .into_iter()
+        .filter(|dir| {
+            dir.as_ref().is_ok_and(|ok_dir| ok_dir.path().is_file() && is_audio_file(ok_dir.path()))
+        })
         .map(|dir| (dir, app_state.pool.clone()))
-        .map(|(dir, pool)| async move {
-            let dir = dir.as_ref().ok();
-            if dir.is_some_and(|entry| entry.path().is_file() && is_audio_file(entry.path())) {
-                Some(Box::pin(upsert_audio_file(
-                    pool.to_owned(),
-                    dir.expect("dir should exist").path().to_owned(),
-                )))
-            } else {
-                None
-            }
+        .map(|(dir, pool)| {
+            Box::pin(upsert_audio_file(
+                pool.to_owned(),
+                dir.expect("dir should exist").path().to_owned(),
+            ))
         })
         .collect();
 
-    join_all(upsert_futures)
-        .await
-        .into_iter()
-        .for_each(|result| {
-            result.ok_or_else(|| println!("Failed to spawn upsert_audio_file task"));
-        });
+    let has_any_error = join_all(upsert_futures).await.into_iter().any(|res| res.is_err());
 
     println!("\nAudio file index updated.");
-    Ok(())
+    Ok(!has_any_error)
 }
 
 #[derive(sqlx::FromRow)]
@@ -107,8 +100,8 @@ pub async fn upsert_audio_file(pool: SqlitePool, path: PathBuf) -> Result<()> {
     Ok(())
 }
 
-pub fn get_search_results(_search_string: &str, pool: &SqlitePool) -> Result<Vec<String>> {
+pub fn get_search_results(_search_string: &str, _pool: &SqlitePool) -> Result<Vec<String>> {
     // Stubbed search algorithm: pick 10 random audio files
 
-    Ok(vec!["~/fake_path.wav".to_string()])
+    Ok(vec![format!("~/{}", _search_string.to_owned()).to_string()])
 }
