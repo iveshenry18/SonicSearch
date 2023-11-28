@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use anyhow::Result;
 use futures::{
     channel::oneshot::{self, Sender},
     lock::Mutex,
@@ -49,7 +50,7 @@ impl AudioEmbedder {
 
     /// This is the function that actually processes the queue.
     /// It continually runs and waits for inputs to be added to the queue.
-    pub async fn process_queue(&self) {
+    pub async fn process_queue(&self) -> Result<()> {
         loop {
             let mut inputs_to_process = Vec::new();
             let session = self.session.lock().await;
@@ -57,6 +58,11 @@ impl AudioEmbedder {
             {
                 let mut input_queue = self.input_queue.lock().await;
                 inputs_to_process.append(input_queue.as_mut());
+            }
+            if (*inputs_to_process).is_empty() {
+                // If the queue is empty, wait for a new input to be added
+                // This causes "busy waiting" and blocks the other threads. Probably use tokio::sync::Notify instead.
+                continue;
             }
 
             let (input_batch, senders): (Vec<Array3<f64>>, Vec<Sender<Array1<f64>>>) =

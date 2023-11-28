@@ -1,3 +1,4 @@
+use futures::join;
 use hound::{SampleFormat, WavReader};
 use mel_spec::config::MelConfig;
 use mel_spec_pipeline::{Pipeline, PipelineConfig};
@@ -78,9 +79,14 @@ pub async fn update_audio_index(app_state: State<'_, AppState>) -> result::Resul
             ))
         })
         .collect();
+    let embedder_future = audio_embedder.process_queue();
 
-    let results: (usize, Vec<String>) = join_all(upsert_futures)
-        .await
+    let (embedder_result, upsert_results) = join!(embedder_future, join_all(upsert_futures));
+
+    embedder_result
+        .context("Model should run successfully")
+        .map_err(|err| format!("Failed to run audio embedder: {:?}", err))?;
+    let upsert_results: (usize, Vec<String>) = upsert_results
         .into_iter()
         .map(|res| res.map_err(|err| format!("Failed to update audio index: {:?}", err)))
         .map(|res| match res {
@@ -99,9 +105,9 @@ pub async fn update_audio_index(app_state: State<'_, AppState>) -> result::Resul
         });
     println!(
         "Indexed {} files total. Success: {}, Failures: {}",
-        results.0 + results.1.len(),
-        results.0,
-        results.1.len()
+        upsert_results.0 + upsert_results.1.len(),
+        upsert_results.0,
+        upsert_results.1.len()
     );
 
     sqlx::query(
@@ -423,19 +429,21 @@ fn compute_mel_spec_from_pcm(segment_pcm: &[f32]) -> Result<Array3<f64>> {
         MEL_CONFIG.n_mels,
         MEL_CONFIG.sample_rate,
     );
+    // TODO: make sure this doesn't have weird Voice Activity Detection side effects
     let pipeline_config = PipelineConfig::new(mel_config, None);
     let mut pipeline = Pipeline::new(pipeline_config);
 
     let rx_clone = pipeline.rx();
     let pipeline_join_handles = pipeline.start();
     pipeline.send_pcm(segment_pcm)?;
+    pipeline.close_ingress();
+
+    let mel_spec = rx_clone.recv().expect("mel_spec should have run").1;
 
     // TODO: this deadlocks
     for handle in pipeline_join_handles {
         handle.join().expect("Pipeline should join");
     }
-    pipeline.close_ingress();
-    let mel_spec = rx_clone.recv().expect("mel_spec should have run").1;
 
     // Repeat-pad to 1001 frames
     Ok(reshape_mel_spec(mel_spec))
