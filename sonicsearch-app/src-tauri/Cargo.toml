@@ -30,6 +30,8 @@ mel_spec = "0.2.2"
 hound = "3.5.1"
 rubato = "0.14.1"
 ndarray = "0.15.6"
+mel_spec_audio = "0.2.2"
+mel_spec_pipeline = "0.2.2"
 
 
 [features]

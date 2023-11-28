@@ -6,12 +6,14 @@ mod clap;
 mod database;
 mod state;
 
+use std::sync::Arc;
+
 use futures::lock::Mutex;
 
 use audio_index::{get_search_results, update_audio_index};
 use sqlx::SqlitePool;
-use state::AppState;
-use tauri::Manager;
+use state::{AppState, AudioEmbedder};
+use tauri::{async_runtime::RwLock, Manager};
 
 #[tauri::command]
 fn search(app_state: tauri::State<AppState>, search_string: &str) -> Result<Vec<String>, String> {
@@ -33,9 +35,9 @@ fn main() {
 
             app.manage(AppState {
                 pool,
-                clap_model_audio_embedder: Mutex::new(clap_model_audio_embedder),
-                clap_model_text_embedder: Mutex::new(clap_model_text_embedder),
-                is_indexing: Mutex::new(false),
+                clap_model_audio_embedder: AudioEmbedder::new(clap_model_audio_embedder),
+                clap_model_text_embedder: Arc::new(Mutex::new(clap_model_text_embedder)),
+                is_indexing: RwLock::new(false),
             });
 
             Ok(())

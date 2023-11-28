@@ -6,6 +6,8 @@ use sqlite_vss::{sqlite3_vector_init, sqlite3_vss_init};
 use sqlx::SqlitePool;
 use tauri::AppHandle;
 
+const EMBEDDING_SIZE: u16 = 512;
+
 pub async fn initialize_database(app_handle: &AppHandle) -> Result<SqlitePool> {
     println!("Setting up database...");
     unsafe {
@@ -40,6 +42,7 @@ pub async fn initialize_database(app_handle: &AppHandle) -> Result<SqlitePool> {
     sqlx::query(r#"DROP TABLE IF EXISTS audio_file_segment;"#)
         .execute(&pool)
         .await?;
+    // Persistent embedding data
     sqlx::query(
         r#"CREATE TABLE IF NOT EXISTS audio_file_segment (
             file_hash TEXT NOT NULL,
@@ -48,6 +51,21 @@ pub async fn initialize_database(app_handle: &AppHandle) -> Result<SqlitePool> {
             FOREIGN KEY (file_hash) REFERENCES audio_file(file_hash),
             PRIMARY KEY (file_hash, starting_timestamp)
         )"#,
+    )
+    .execute(&pool)
+    .await?;
+    // Virtual (in-memory) table for vector search using sqlite-vss
+    sqlx::query(
+        r#"CREATE VIRTUAL TABLE IF NOT EXISTS vss_audio_file_segment USING vss0(
+            embedding(?)
+        )"#,
+    )
+    .bind(EMBEDDING_SIZE)
+    .execute(&pool)
+    .await?;
+    sqlx::query(
+        r#"INSERT INTO vss_audio_file_segment
+            SELECT embedding FROM audio_file_segment"#,
     )
     .execute(&pool)
     .await?;

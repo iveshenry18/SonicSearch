@@ -1,7 +1,7 @@
-use hound::WavReader;
-use mel_spec::prelude::*;
-use ort::Session;
-use ort::tensor::OrtOwnedTensor;
+use hound::{SampleFormat, WavReader};
+use mel_spec::config::MelConfig;
+use mel_spec_pipeline::{Pipeline, PipelineConfig};
+use ndarray::{concatenate, Array2, Array3, Axis};
 use rubato::{
     Resampler, SincFixedIn, SincInterpolationParameters, SincInterpolationType, WindowFunction,
 };
@@ -21,7 +21,7 @@ use tauri::State;
 use twox_hash::XxHash64;
 use walkdir::WalkDir;
 
-use crate::state::AppState;
+use crate::state::{AppState, AudioEmbedder};
 
 fn compute_hash(file: &File) -> io::Result<String> {
     let hash_seed = 1023489u64;
@@ -41,34 +41,28 @@ fn compute_hash(file: &File) -> io::Result<String> {
 }
 
 fn is_audio_file(path: &Path) -> bool {
-    // Implement logic to determine if a file is an audio file
-    // This could be by extension or by inspecting the file content
     path.extension()
         .map(|ext| {
             let ext = ext.to_str().unwrap_or("").to_lowercase();
-            // Define your supported audio file extensions here
-            ["mp3", "wav", "flac", "m4a", "aiff"].contains(&ext.as_str())
+            ["wav"].contains(&ext.as_str())
         })
         .unwrap_or(false)
 }
 
 #[tauri::command]
-pub async fn update_audio_index(app_state: State<'_, AppState>) -> result::Result<bool, usize> {
+pub async fn update_audio_index(app_state: State<'_, AppState>) -> result::Result<bool, String> {
     println!("Updating audio file index...");
-    // TODO: change this such that the frontend can Read (but not modify) the is_indexing state
-    let mut is_indexing = app_state.is_indexing.lock().await;
+    let mut is_indexing = app_state.is_indexing.write().await;
     if *is_indexing {
         // Should never happen, as is_indexing should be locked while index is occuring
         println!("Indexing already in progress.");
-        return Ok(false);
+        return Err("Indexing already in progress.".into());
     } else {
         *is_indexing = true;
     }
     let user_audio_dir = dirs::audio_dir().expect("Failed to get user home directory");
-    let audio_model = app_state
-        .clap_model_audio_embedder
-        .lock()
-        .await;
+    let audio_embedder = &app_state.clap_model_audio_embedder;
+    let pool = app_state.pool.clone();
 
     let upsert_futures: Vec<_> = WalkDir::new(user_audio_dir)
         .into_iter()
@@ -76,24 +70,51 @@ pub async fn update_audio_index(app_state: State<'_, AppState>) -> result::Resul
             dir.as_ref()
                 .is_ok_and(|ok_dir| ok_dir.path().is_file() && is_audio_file(ok_dir.path()))
         })
-        .map(|dir| (dir, app_state.pool.clone()))
-        .map(|(dir, pool)| {
+        .map(move |dir| {
             Box::pin(upsert_audio_file(
                 pool.to_owned(),
-                audio_model.to_owned(),
+                audio_embedder,
                 dir.expect("dir should exist").path().to_owned(),
             ))
         })
         .collect();
 
-    let has_any_error = join_all(upsert_futures)
+    let results: (usize, Vec<String>) = join_all(upsert_futures)
         .await
         .into_iter()
-        .any(|res| res.is_err());
+        .map(|res| res.map_err(|err| format!("Failed to update audio index: {:?}", err)))
+        .map(|res| match res {
+            Ok(ok) => Ok(ok),
+            Err(err) => {
+                println!("{}", err);
+                Err(err)
+            }
+        })
+        .fold((0, vec![]), |mut acc, res| {
+            match res {
+                Ok(_) => acc.0 += 1,
+                Err(err) => acc.1.push(err),
+            }
+            acc
+        });
+    println!(
+        "Indexed {} files total. Success: {}, Failures: {}",
+        results.0 + results.1.len(),
+        results.0,
+        results.1.len()
+    );
+
+    sqlx::query(
+        r#"INSERT INTO vss_audio_file_segment
+            SELECT embedding FROM audio_file_segment"#,
+    )
+    .execute(&app_state.pool)
+    .await
+    .map_err(|err| format!("Failed to update vss_audio_file_segment: {:?}", err))?;
 
     println!("\nAudio file index updated.");
     *is_indexing = false;
-    Ok(!has_any_error)
+    Ok(true)
 }
 
 struct LoadedAudioFile {
@@ -107,8 +128,12 @@ struct AudioFileRow {
     file_path: String,
 }
 
-pub async fn upsert_audio_file(pool: SqlitePool, audio_model: Session, path: PathBuf) -> Result<()> {
-    println!("Loading {} ", path.display());
+pub async fn upsert_audio_file(
+    pool: SqlitePool,
+    audio_embedder: &AudioEmbedder,
+    path: PathBuf,
+) -> Result<()> {
+    println!("Upserting {} ", path.display());
     let file = File::open(&path)?;
     let audio_file = LoadedAudioFile {
         file_hash: compute_hash(&file).context("Failed to compute hash")?,
@@ -124,10 +149,17 @@ pub async fn upsert_audio_file(pool: SqlitePool, audio_model: Session, path: Pat
     .await?;
 
     if existing_row.is_none() {
-        println!("TODO: index_new_file for {}", path.display());
-        index_new_file(pool, audio_model, &audio_file).await?;
-    } else if existing_row.is_some_and(|row| row.file_path != audio_file.file_path) {
-        println!("TODO: update path for {}", path.display());
+        println!("{} is new, indexing...", path.display());
+        index_new_file(pool, audio_embedder, &audio_file).await?;
+    } else if existing_row
+        .as_ref()
+        .is_some_and(|row| row.file_path != audio_file.file_path)
+    {
+        println!(
+            "{} has moved from {}, updating path...",
+            path.display(),
+            existing_row.as_ref().unwrap().file_path
+        );
         update_path(pool, &audio_file).await?;
     } else {
         println!("{} already indexed.", path.display());
@@ -151,27 +183,45 @@ struct FileSegment<'a> {
     pcm_audio: &'a [f32],
 }
 
-struct FileSegmentWithEmbedding<'a> {
+struct FileSegmentWithEmbedding {
     starting_timestamp: f64,
-    pcm_audio: &'a [f32],
-    embedding: Vec<u8>,
+    embedding: Vec<f64>,
 }
 
-async fn index_new_file(pool: SqlitePool, audio_model: Session, audio_file: &LoadedAudioFile) -> Result<()> {
+async fn index_new_file(
+    pool: SqlitePool,
+    audio_embedder: &AudioEmbedder,
+    audio_file: &LoadedAudioFile,
+) -> Result<u32> {
     // Split file into segments and compute embeddings for each segment
     // Once all are computed, insert into database
 
     // Process audio file into embedded segments
-    let pcm_audio = preprocess_audio_file_to_pcm(audio_file).await?;
+    println!("Preprocessing {}...", audio_file.file_path);
+    let pcm_audio = preprocess_audio_file_to_pcm(audio_file)
+        .await
+        .context(format!(
+            "Failed to preprocess audio file {}",
+            audio_file.file_path
+        ))?;
+    println!("Splitting {} into segments...", audio_file.file_path);
     let audio_segments = split_audio_into_segments(&pcm_audio);
-    let segments_with_embeddings = join_all(audio_segments.into_iter().map(
-        |segment: FileSegment| async move {
-            let segment_embedding = compute_embedding(segment.pcm_audio, audio_model)
+    println!(
+        "Computing embeddings for {} segments of {}...",
+        audio_segments.len(),
+        audio_file.file_path
+    );
+    let segments_with_embeddings = join_all(audio_segments.into_iter().enumerate().map(
+        |(i, segment)| async move {
+            println!(
+                "Computing embedding for segment {} of {}...",
+                i, audio_file.file_path
+            );
+            let segment_embedding = compute_embedding_from_pcm(segment.pcm_audio, audio_embedder)
                 .await
                 .expect("Failed to compute embedding");
             FileSegmentWithEmbedding {
                 starting_timestamp: segment.starting_timestamp,
-                pcm_audio: segment.pcm_audio,
                 embedding: segment_embedding,
             }
         },
@@ -179,6 +229,11 @@ async fn index_new_file(pool: SqlitePool, audio_model: Session, audio_file: &Loa
     .await;
 
     // Insert all segments and audio file into database
+    println!(
+        "Inserting {} segments of {} into database...",
+        segments_with_embeddings.len(),
+        audio_file.file_path
+    );
     pool.begin().await?;
     sqlx::query!(
         r#"INSERT INTO audio_file (file_hash, file_path) VALUES (?, ?)"#,
@@ -188,25 +243,27 @@ async fn index_new_file(pool: SqlitePool, audio_model: Session, audio_file: &Loa
     .execute(&pool)
     .await?;
     join_all(segments_with_embeddings.into_iter().map(|segment| (segment, pool.clone())).map(|(segment, pool)| async move {
+        // TODO: consider using a raw byte array instead of JSON. Must clarify endianness.
+        let encoded_embedding: String = serde_json::to_string(&(segment.embedding.to_owned().iter().map(|emb| *emb as f32).collect::<Vec<f32>>())).expect("Should be able to serialize embedding");
         sqlx::query!(
             r#"INSERT INTO audio_file_segment (file_hash, starting_timestamp, embedding) VALUES (?, ?, ?)"#,
             audio_file.file_hash,
             segment.starting_timestamp,
-            segment.embedding
+            encoded_embedding
         )
             .execute(&pool)
             .await.expect("Segment insertion should succeed");
     })).await;
 
-    Ok(())
+    Ok(1)
 }
+
 const TARGET_SAMPLE_RATE: u32 = 48000;
 const SEGMENT_LENGTH: f32 = 10.0; // seconds
 const SEGMENT_STEP: f32 = 5.0; // seconds
 
 /// Process an audio file into an f32 PCM vector with a sample rate of 48kHz
 async fn preprocess_audio_file_to_pcm(audio_file: &LoadedAudioFile) -> Result<Vec<f32>> {
-    // TODO: implement
     let file_ext = audio_file
         .file_path
         .split('.')
@@ -217,14 +274,22 @@ async fn preprocess_audio_file_to_pcm(audio_file: &LoadedAudioFile) -> Result<Ve
 
     match file_ext {
         "wav" => {
-            let wav_file = audio_file.file.as_ref().context(".wav file should exist")?;
-            let wav_reader = WavReader::new(wav_file).context("Failed to read .wav file")?;
+            let wav_reader =
+                WavReader::open(&audio_file.file_path).context("Failed to read .wav file")?;
             let wav_spec = wav_reader.spec();
-            // Feeling ~60% confident that this will handle various bit depths correctly
-            let mut wav_samples: Vec<f32> = wav_reader
-                .into_samples::<f32>()
-                .map(|sample| sample.expect("Failed to read .wav sample"))
-                .collect();
+            let mut wav_samples: Vec<f32> = match wav_spec.sample_format {
+                SampleFormat::Float => wav_reader
+                    .into_samples::<f32>()
+                    .map(|sample| sample.expect("Failed to read .wav sample"))
+                    .collect(),
+                SampleFormat::Int => wav_reader
+                    .into_samples::<i32>()
+                    .map(|sample| {
+                        let sample = sample.expect("Failed to read .wav sample");
+                        sample as f32 / i32::MAX as f32
+                    })
+                    .collect(),
+            };
 
             if wav_spec.channels != 1 {
                 // Sum to mono
@@ -238,7 +303,11 @@ async fn preprocess_audio_file_to_pcm(audio_file: &LoadedAudioFile) -> Result<Ve
             }
             Ok(wav_samples)
         }
-        _ => Err(anyhow::anyhow!("Unsupported file extension: {}", file_ext)),
+        _ => Err(anyhow::anyhow!(
+            "Unsupported file extension: {} for file {}",
+            file_ext,
+            audio_file.file_path
+        )),
     }
 }
 
@@ -285,54 +354,117 @@ fn split_audio_into_segments(pcm_audio: &[f32]) -> Vec<FileSegment> {
         current_sample += segment_step_samples;
     }
 
+    let segments = match segments.len() {
+        0 => vec![FileSegment {
+            starting_timestamp: 0.0,
+            pcm_audio,
+        }],
+        _ => segments,
+    };
     println!("Split into {} segments", segments.len());
     segments
 }
 
-struct MelConfig {
+struct MelConfigSettings {
     fft_size: usize,
-    sample_rate: usize,
+    sample_rate: f64,
     hop_size: usize,
     n_mels: usize,
-    power: f64,
+    _power: f64,
 }
 
 /// Config based on `clap_export.ipynb` experiments
-const MEL_CONFIG: MelConfig = 
-    MelConfig {
-        fft_size: 1024,
-        sample_rate: TARGET_SAMPLE_RATE as usize,
-        hop_size: 480,
-        n_mels: 64,
-        power: 2.0,
+const MEL_CONFIG: MelConfigSettings = MelConfigSettings {
+    fft_size: 1024,
+    sample_rate: TARGET_SAMPLE_RATE as f64,
+    hop_size: 480,
+    n_mels: 64,
+    _power: 2.0,
 };
 
+const TARGET_LENGTH: usize = 1001;
+fn reshape_mel_spec(mel_spec: Array2<f64>) -> Array3<f64> {
+    let mut result: Array2<f64> = mel_spec.clone();
+    while result.len_of(Axis(1)) < TARGET_LENGTH {
+        let result_len = result.len_of(Axis(1));
+        let padding_left = TARGET_LENGTH - result_len;
+        let slice_bound = match padding_left > result_len {
+            true => result_len,
+            false => padding_left,
+        };
 
+        let view_to_add = mel_spec.slice_axis(
+            Axis(1),
+            ndarray::Slice {
+                start: (0),
+                end: (Some(
+                    slice_bound
+                        .try_into()
+                        .expect("slice_bound should always be positive"),
+                )),
+                step: (1),
+            },
+        );
+        result = concatenate![Axis(1), result, view_to_add];
+    }
 
-async fn compute_embedding(segment_pcm: &[f32], audio_model: Session) -> result::Result<Vec<u8>, ()> {
-    // TODO: implement embedding computation
-    
-    // Compute mel spectrogram
-    let mel_spec = MelSpec::new(
-        MEL_CONFIG.fft_size,
-        MEL_CONFIG.sample_rate,
-        MEL_CONFIG.hop_size,
-        MEL_CONFIG.n_mels,
-        MEL_CONFIG.power,
-    );
-    let mel_spec = mel_spec.compute(segment_pcm).expect("Failed to compute mel spectrogram");
-
-    // Compute embedding
-    let embedding = compute_embedding_from_mel_spec(mel_spec, audio_model).await;
-
-    Ok(vec![])
+    result.insert_axis(Axis(0))
 }
 
-async fn compute_embedding_from_mel_spec(mel_spec: MelSpec, audio_model: Session) -> Vec<f32> {
-    let outputs = audio_model.run(vec![mel_spec.data]).expect("Failed to run audio model");
-    // Get outputs[0] (outputs[1] is last_hidden state)
-    let embedding: OrtOwnedTensor<f32, _> = outputs[0].try_extract().expect("Failed to extract embedding");
-    embedding.view().slice(s![0, ..]).to_vec()
+fn compute_mel_spec_from_pcm(segment_pcm: &[f32]) -> Result<Array3<f64>> {
+    println!(
+        "Computing mel spectrogram for pcm of length {}",
+        segment_pcm.len()
+    );
+    // Compute mel spectrogram
+    let mel_config = MelConfig::new(
+        MEL_CONFIG.fft_size,
+        MEL_CONFIG.hop_size,
+        MEL_CONFIG.n_mels,
+        MEL_CONFIG.sample_rate,
+    );
+    let pipeline_config = PipelineConfig::new(mel_config, None);
+    let mut pipeline = Pipeline::new(pipeline_config);
+
+    let rx_clone = pipeline.rx();
+    let pipeline_join_handles = pipeline.start();
+    pipeline.send_pcm(segment_pcm)?;
+
+    // TODO: this deadlocks
+    for handle in pipeline_join_handles {
+        handle.join().expect("Pipeline should join");
+    }
+    pipeline.close_ingress();
+    let mel_spec = rx_clone.recv().expect("mel_spec should have run").1;
+
+    // Repeat-pad to 1001 frames
+    Ok(reshape_mel_spec(mel_spec))
+}
+
+async fn compute_embedding_from_pcm(
+    segment_pcm: &[f32],
+    audio_embedder: &AudioEmbedder,
+) -> Result<Vec<f64>> {
+    let mel_spec = compute_mel_spec_from_pcm(segment_pcm)?;
+    // Compute embedding
+    let embedding = compute_embedding_from_mel_spec(mel_spec, audio_embedder).await;
+
+    Ok(embedding)
+}
+
+async fn compute_embedding_from_mel_spec(
+    mel_spec: Array3<f64>,
+    audio_embedder: &AudioEmbedder,
+) -> Vec<f64> {
+    println!(
+        "Computing embedding for mel_spec of shape {:?}",
+        mel_spec.shape()
+    );
+    let embedding = audio_embedder
+        .queue_for_batch_processing(mel_spec.to_owned())
+        .await;
+
+    embedding.to_vec()
 }
 
 pub fn get_search_results(search_string: &str, _pool: &SqlitePool) -> Result<Vec<String>> {
