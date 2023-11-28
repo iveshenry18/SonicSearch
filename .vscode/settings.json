@@ -3,6 +3,25 @@
         "${workspaceFolder}/sonicsearch-app/src-tauri/Cargo.toml"
     ],
     "rust-analyzer.check.command": "clippy",
+    "rust-analyzer.debug.engine": "vadimcn.vscode-lldb",
+    "rust-analyzer.debug.engineSettings": {
+        "trace": true,
+        "showDisassembly": "auto",
+        "sourceLanguages": [
+            "rust"
+        ],
+        "cargo": {
+            "allFeatures": true,
+            "loadOutDirsFromCheck": true
+        },
+        "rust": {
+            "args": [
+                "-C",
+                "debuginfo=2"
+            ]
+        },
+    },
+    "debug.allowBreakpointsEverywhere": true,
     "editor.inlayHints.enabled": "offUnlessPressed",
     "jupyter.debugJustMyCode": false
 }

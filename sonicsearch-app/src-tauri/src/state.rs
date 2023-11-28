@@ -10,6 +10,7 @@ use ndarray::{stack, Array1, Array3, Axis, CowArray};
 use ort::Session;
 use sqlx::SqlitePool;
 use tauri::async_runtime::RwLock;
+use tokio::sync::Notify;
 
 pub struct AppState {
     pub pool: SqlitePool,
@@ -21,6 +22,7 @@ pub struct AppState {
 pub struct AudioEmbedder {
     session: Arc<Mutex<Session>>,
     input_queue: Arc<Mutex<Vec<(Array3<f64>, Sender<Array1<f64>>)>>>,
+    queue_notify: Arc<Notify>,
 }
 
 /// This is a wrapper around the ONNX runtime session that allows us to queue up
@@ -31,6 +33,7 @@ impl AudioEmbedder {
         Self {
             session: Arc::new(Mutex::new(session)),
             input_queue: Arc::new(Mutex::new(Vec::new())),
+            queue_notify: Arc::new(Notify::new()),
         }
     }
 
@@ -44,6 +47,8 @@ impl AudioEmbedder {
             let mut input_queue = self.input_queue.lock().await;
             (*input_queue).push((input, sender));
         }
+        // If process_queue is waiting for inputs, wake it up
+        self.queue_notify.notify_one();
 
         receiver.await.unwrap()
     }
@@ -52,6 +57,9 @@ impl AudioEmbedder {
     /// It continually runs and waits for inputs to be added to the queue.
     pub async fn process_queue(&self) -> Result<()> {
         loop {
+            // Wait until there are inputs to process
+            self.queue_notify.notified().await;
+
             let mut inputs_to_process = Vec::new();
             let session = self.session.lock().await;
             // Read from the queue and release the lock
@@ -59,12 +67,8 @@ impl AudioEmbedder {
                 let mut input_queue = self.input_queue.lock().await;
                 inputs_to_process.append(input_queue.as_mut());
             }
-            if (*inputs_to_process).is_empty() {
-                // If the queue is empty, wait for a new input to be added
-                // This causes "busy waiting" and blocks the other threads. Probably use tokio::sync::Notify instead.
-                continue;
-            }
 
+            println!("Processing {} inputs", inputs_to_process.len());
             let (input_batch, senders): (Vec<Array3<f64>>, Vec<Sender<Array1<f64>>>) =
                 inputs_to_process
                     .into_iter()

@@ -32,6 +32,7 @@ rubato = "0.14.1"
 ndarray = "0.15.6"
 mel_spec_audio = "0.2.2"
 mel_spec_pipeline = "0.2.2"
+tokio = { version = "1.34.0", features = ["sync"] }
 
 
 [features]

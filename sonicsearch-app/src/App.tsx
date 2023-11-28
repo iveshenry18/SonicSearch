@@ -14,31 +14,29 @@ function App() {
     ProcessedSearchResult[]
   >([]);
   const [searchString, setSearchString] = createSignal("");
-  const [indexIsReady, setIndexIsReady] = createSignal(false);
+  const [isIndexing, setIsIndexing] = createSignal(false);
   const [refreshCount, setRefreshCount] = createSignal(0);
   const [resetCount, setResetCount] = createSignal(0);
 
   async function updateAudioIndex() {
+    setIsIndexing(true);
     const res = await invoke("update_audio_index");
     console.debug(res);
-    setIndexIsReady(true);
+    setIsIndexing(false);
   }
 
   createEffect(() => {
     // This is a hack to force the app to refresh the index
     refreshCount();
-    if (!indexIsReady()) {
-      updateAudioIndex();
-    }
+    updateAudioIndex();
   });
 
   createEffect(() => {
     async function resetAudioIndex() {
       const res = await invoke("reset_audio_index");
       console.debug(res);
-      setIndexIsReady(false);
     }
-    
+
     async function resetAndRefreshAudioIndex() {
       await resetAudioIndex();
       updateAudioIndex();
@@ -112,6 +110,7 @@ function App() {
           </ul>
         </div>
       )}
+      {isIndexing() && <p>Indexing your files...</p>}
     </div>
   );
 }

@@ -281,6 +281,8 @@ async fn preprocess_audio_file_to_pcm(audio_file: &LoadedAudioFile) -> Result<Ve
     match file_ext {
         "wav" => {
             let wav_reader =
+                // TODO: this probably redundantly opens the file, which can take a while.
+                // Easy perf win: use audio_file.file instead.
                 WavReader::open(&audio_file.file_path).context("Failed to read .wav file")?;
             let wav_spec = wav_reader.spec();
             let mut wav_samples: Vec<f32> = match wav_spec.sample_format {
@@ -390,6 +392,7 @@ const MEL_CONFIG: MelConfigSettings = MelConfigSettings {
 
 const TARGET_LENGTH: usize = 1001;
 fn reshape_mel_spec(mel_spec: Array2<f64>) -> Array3<f64> {
+    println!("Reshaping mel_spec of shape {:?}", mel_spec.shape());
     let mut result: Array2<f64> = mel_spec.clone();
     while result.len_of(Axis(1)) < TARGET_LENGTH {
         let result_len = result.len_of(Axis(1));
@@ -433,20 +436,20 @@ fn compute_mel_spec_from_pcm(segment_pcm: &[f32]) -> Result<Array3<f64>> {
     let pipeline_config = PipelineConfig::new(mel_config, None);
     let mut pipeline = Pipeline::new(pipeline_config);
 
-    let rx_clone = pipeline.rx();
     let pipeline_join_handles = pipeline.start();
+    let rx_clone = pipeline.rx();
     pipeline.send_pcm(segment_pcm)?;
+
+    let mel_spec_res = rx_clone.recv().map(|(_, mel_spec)| reshape_mel_spec(mel_spec)).map_err(|err| {
+        anyhow::format_err!("Failed to receive mel spectrogram from pipeline: {:?}", err)
+    });
+
     pipeline.close_ingress();
-
-    let mel_spec = rx_clone.recv().expect("mel_spec should have run").1;
-
-    // TODO: this deadlocks
     for handle in pipeline_join_handles {
         handle.join().expect("Pipeline should join");
     }
-
-    // Repeat-pad to 1001 frames
-    Ok(reshape_mel_spec(mel_spec))
+    
+    mel_spec_res
 }
 
 async fn compute_embedding_from_pcm(

@@ -1,0 +1,46 @@
+{
+    // Use IntelliSense to learn about possible attributes.
+    // Hover to view descriptions of existing attributes.
+    // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Tauri Development Debug",
+            "cargo": {
+                "env": {
+                    "ORT_DYLIB_PATH": "/opt/homebrew/Cellar/onnxruntime/1.16.1/lib/libonnxruntime.dylib",
+                    "RUST_BACKTRACE": "1",
+                    "RUSTFLAGS": "-L/opt/homebrew/opt/libomp/lib -L/opt/homebrew/opt/llvm/lib -lblas -llapack"
+                },
+                "args": [
+                    "build",
+                    "--manifest-path=./sonicsearch-app/src-tauri/Cargo.toml",
+                    "--no-default-features",
+                ]
+            },
+            // task for the `beforeDevCommand` if used, must be configured in `.vscode/tasks.json`
+            "preLaunchTask": "ui:dev"
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Tauri Production Debug",
+            "env": {
+                "RUST_BACKTRACE": "1",
+                "ORT_DYLIB_PATH": "'/opt/homebrew/Cellar/onnxruntime/1.16.1/lib/libonnxruntime.dylib'",
+                "RUSTFLAGS": "'-L/opt/homebrew/opt/libomp/lib -L/opt/homebrew/opt/llvm/lib -lblas -llapack'"
+            },
+            "cargo": {
+                "args": [
+                    "build",
+                    "--release",
+                    "--manifest-path=./sonicsearch-app/src-tauri/Cargo.toml"
+                ]
+            },
+            // task for the `beforeBuildCommand` if used, must be configured in `.vscode/tasks.json`
+            "preLaunchTask": "ui:build"
+        }
+    ]
+}
