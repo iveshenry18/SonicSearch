@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use futures::{
     channel::oneshot::{self, Sender},
     lock::Mutex,
@@ -40,7 +40,7 @@ impl AudioEmbedder {
     /// Other threads can call this to queue up audio for batch processing.
     /// This is a blocking call that will wait until the input has been processed,
     /// then return the output for the given input.
-    pub async fn queue_for_batch_processing(&self, input: Array3<f64>) -> Array1<f64> {
+    pub async fn queue_for_batch_processing(&self, input: Array3<f64>) -> Result<Array1<f64>> {
         let (sender, receiver) = oneshot::channel();
 
         {
@@ -50,7 +50,9 @@ impl AudioEmbedder {
         // If process_queue is waiting for inputs, wake it up
         self.queue_notify.notify_one();
 
-        receiver.await.unwrap()
+        receiver
+            .await
+            .context("Did not receive output from audio embedder")
     }
 
     /// This is the function that actually processes the queue.
@@ -68,7 +70,7 @@ impl AudioEmbedder {
                 inputs_to_process.append(input_queue.as_mut());
             }
 
-            println!("Processing {} inputs", inputs_to_process.len());
+            println!("Embedding {} input(s)", inputs_to_process.len());
             let (input_batch, senders): (Vec<Array3<f64>>, Vec<Sender<Array1<f64>>>) =
                 inputs_to_process
                     .into_iter()
@@ -82,30 +84,34 @@ impl AudioEmbedder {
                     .map(|x| x.view())
                     .collect::<Vec<_>>()
                     .as_slice(),
-            )
-            .unwrap();
+            )?;
+
             let outputs = session
                 .run(vec![ort::Value::from_array(
                     session.allocator(),
-                    &CowArray::from(input_batch.into_dyn()),
+                    &CowArray::from(input_batch.mapv(|x| x as f32).into_dyn()),
                 )
-                .unwrap()])
-                .unwrap();
+                .context("Failed to create ort::Value from array")?])
+                .context("Failed to run session")?;
 
             // Send the outputs back to the threads that requested them
             // This is probably wrong and maybe also takes fourteen years
-            let outputs: Vec<Array1<f64>> = outputs
+            let outputs: Result<Vec<Array1<f32>>> = outputs
                 .into_iter()
                 .map(|output| {
-                    let output = output.try_extract().unwrap();
+                    let output = output.try_extract().context("Failed to extract output")?;
                     let output = output.view();
-                    let output = output.as_slice().unwrap();
-                    Array1::from_shape_vec(output.len(), output.to_vec()).unwrap()
+                    let output = output.as_slice().context("Failed to get output slice")?;
+                    Array1::from_shape_vec(output.len(), output.to_vec())
+                        .context("Failed to create output array")
                 })
                 .collect();
+            let outputs = outputs?;
 
             for (output, sender) in outputs.into_iter().zip(senders.into_iter()) {
-                sender.send(output).unwrap();
+                sender
+                    .send(output.mapv(|x| f64::from(x)))
+                    .expect("Failed to send output");
             }
         }
     }

@@ -8,6 +8,11 @@
             "type": "lldb",
             "request": "launch",
             "name": "Tauri Development Debug",
+            "env": {
+                "ORT_DYLIB_PATH": "/opt/homebrew/Cellar/onnxruntime/1.16.1/lib/libonnxruntime.dylib",
+                "RUST_BACKTRACE": "1",
+                "RUSTFLAGS": "-L/opt/homebrew/opt/libomp/lib -L/opt/homebrew/opt/llvm/lib -lblas -llapack"
+            },
             "cargo": {
                 "env": {
                     "ORT_DYLIB_PATH": "/opt/homebrew/Cellar/onnxruntime/1.16.1/lib/libonnxruntime.dylib",

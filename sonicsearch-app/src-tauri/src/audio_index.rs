@@ -1,19 +1,20 @@
 use futures::join;
 use hound::{SampleFormat, WavReader};
 use mel_spec::config::MelConfig;
-use mel_spec_pipeline::{Pipeline, PipelineConfig, PipelineOutputBuffer};
+use mel_spec_pipeline::{Pipeline, PipelineConfig};
 use ndarray::{concatenate, Array2, Array3, Axis};
-use rubato::{
-    Resampler, SincFixedIn, SincInterpolationParameters, SincInterpolationType, WindowFunction,
-};
+use ort::{Environment, GraphOptimizationLevel, SessionBuilder};
+use rubato::{FftFixedIn, Resampler};
 use std::hash::Hasher;
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::{cmp, result};
 use std::{
     fs::File,
     io::{self, BufReader, Read},
     path::Path,
 };
+use tokio::try_join;
 
 use anyhow::{Context, Result};
 use futures::future::join_all;
@@ -22,7 +23,6 @@ use tauri::State;
 use twox_hash::XxHash64;
 use walkdir::WalkDir;
 
-use crate::clap::load_clap_models;
 use crate::state::{AppState, AudioEmbedder};
 
 fn compute_hash(file: &File) -> io::Result<String> {
@@ -185,11 +185,13 @@ async fn update_path(pool: SqlitePool, audio_file: &LoadedAudioFile) -> Result<(
     Ok(())
 }
 
+#[derive(Debug)]
 struct FileSegment<'a> {
     starting_timestamp: f64,
     pcm_audio: &'a [f32],
 }
 
+#[derive(Debug)]
 struct FileSegmentWithEmbedding {
     starting_timestamp: f64,
     embedding: Vec<f64>,
@@ -203,43 +205,7 @@ async fn index_new_file(
     // Split file into segments and compute embeddings for each segment
     // Once all are computed, insert into database
 
-    // Process audio file into embedded segments
-    println!("Preprocessing {}...", audio_file.file_path);
-    let pcm_audio = preprocess_audio_file_to_pcm(audio_file)
-        .await
-        .context(format!(
-            "Failed to preprocess audio file {}",
-            audio_file.file_path
-        ))?;
-    println!("Splitting {} into segments...", audio_file.file_path);
-    let audio_segments = split_audio_into_segments(&pcm_audio);
-    println!(
-        "Computing embeddings for {} segments of {}...",
-        audio_segments.len(),
-        audio_file.file_path
-    );
-    let segments_with_embeddings = join_all(audio_segments.into_iter().enumerate().map(
-        |(i, segment)| async move {
-            println!(
-                "Computing embedding for segment {} of {}...",
-                i, audio_file.file_path
-            );
-            let segment_embedding = compute_embedding_from_pcm(segment.pcm_audio, audio_embedder)
-                .await
-                .expect(
-                    format!(
-                        "Failed to compute embedding for segment {} of {}",
-                        i, audio_file.file_path
-                    )
-                    .as_str(),
-                );
-            FileSegmentWithEmbedding {
-                starting_timestamp: segment.starting_timestamp,
-                embedding: segment_embedding,
-            }
-        },
-    ))
-    .await;
+    let segments_with_embeddings = segment_and_embed_file(audio_file, audio_embedder).await?;
 
     // Insert all segments and audio file into database
     println!(
@@ -271,9 +237,111 @@ async fn index_new_file(
     Ok(1)
 }
 
+async fn segment_and_embed_file(
+    audio_file: &LoadedAudioFile,
+    audio_embedder: &AudioEmbedder,
+) -> Result<Vec<FileSegmentWithEmbedding>> {
+    // Process audio file into embedded segments
+    println!("Preprocessing {}...", get_file_name(&audio_file.file_path));
+    let pcm_audio = preprocess_audio_file_to_pcm(audio_file)
+        .await
+        .context(format!(
+            "Failed to preprocess audio file {}",
+            audio_file.file_path
+        ))?;
+    println!(
+        "Preprocessed {} into {} samples",
+        get_file_name(&audio_file.file_path),
+        pcm_audio.len()
+    );
+    println!(
+        "Splitting {} into segments...",
+        get_file_name(&audio_file.file_path)
+    );
+    let audio_segments = split_audio_into_segments(&pcm_audio);
+    println!(
+        "Split {} into {} segments with lengths {:?}",
+        get_file_name(&audio_file.file_path),
+        audio_segments.len(),
+        audio_segments
+            .iter()
+            .map(|segment| segment.pcm_audio.len())
+            .collect::<Vec<usize>>()
+    );
+    let segments_with_embeddings: Result<Vec<_>> = Result::from_iter(
+        join_all(
+            audio_segments
+                .into_iter()
+                .enumerate()
+                .map(|(i, segment)| async move {
+                    println!(
+                        "Computing embedding for segment {} of {}...",
+                        i,
+                        get_file_name(&audio_file.file_path)
+                    );
+                    let segment_embedding =
+                        compute_embedding_from_pcm(segment.pcm_audio, audio_embedder)
+                            .await
+                            .context("Failed to compute embedding for segment {} of {}")?;
+                    Ok(FileSegmentWithEmbedding {
+                        starting_timestamp: segment.starting_timestamp,
+                        embedding: segment_embedding,
+                    })
+                }),
+        )
+        .await,
+    );
+
+    segments_with_embeddings
+}
+
+/// Get local path for testing, based on CARGO_MANIFEST_DIR env var
+fn get_local_path(path: &str) -> Result<String> {
+    let mut local_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    local_path.push(path);
+    let local_path_string = local_path
+        .into_os_string()
+        .into_string()
+        .expect("Should be able to convert path to string");
+    Ok(local_path_string)
+}
+
+#[tokio::test]
+async fn test_segment_and_embed_file() {
+    let test_audio_file = LoadedAudioFile {
+        file_hash: "fake_hash".to_string(),
+        file_path: get_local_path("test_resources/audio/audio_00.wav")
+            .expect("Should get local path"),
+        file: None,
+    };
+    let test_audio_embedder = Arc::new(create_local_audio_embedder());
+
+    let process_queue = tokio::spawn({
+        let cloned_audio_embedder = test_audio_embedder.clone();
+        async move { cloned_audio_embedder.to_owned().process_queue().await }
+    });
+    let segment_and_embed = tokio::spawn({
+        let cloned_audio_embedder = test_audio_embedder.clone();
+        async move { segment_and_embed_file(&test_audio_file, &cloned_audio_embedder).await }
+    });
+
+    let (process_result, embed_result) =
+        try_join!(process_queue, segment_and_embed).expect("Should join futures");
+    println!("{:?}", process_result);
+    println!("{:?}", embed_result);
+}
+
 const TARGET_SAMPLE_RATE: u32 = 48000;
 const SEGMENT_LENGTH: f32 = 10.0; // seconds
 const SEGMENT_STEP: f32 = 5.0; // seconds
+
+fn get_file_name(path: &String) -> String {
+    let path = Path::new(path);
+    path.file_name()
+        .and_then(|file_name| file_name.to_str())
+        .map(|file_name| file_name.to_string())
+        .expect("Should get file name")
+}
 
 /// Process an audio file into an f32 PCM vector with a sample rate of 48kHz
 async fn preprocess_audio_file_to_pcm(audio_file: &LoadedAudioFile) -> Result<Vec<f32>> {
@@ -292,6 +360,14 @@ async fn preprocess_audio_file_to_pcm(audio_file: &LoadedAudioFile) -> Result<Ve
                 // Easy perf win: use audio_file.file instead.
                 WavReader::open(&audio_file.file_path).context("Failed to read .wav file")?;
             let wav_spec = wav_reader.spec();
+            let initial_seconds = wav_reader.duration() as f32 / wav_spec.sample_rate as f32;
+            println!(
+                "Before preprocessing, {} has a sample rate of {} and a length of {} samples, for a duration of {} seconds",
+                get_file_name(&audio_file.file_path),
+                wav_spec.sample_rate,
+                wav_reader.duration(),
+                initial_seconds
+            );
             let mut wav_samples: Vec<f32> = match wav_spec.sample_format {
                 SampleFormat::Float => wav_reader
                     .into_samples::<f32>()
@@ -301,7 +377,8 @@ async fn preprocess_audio_file_to_pcm(audio_file: &LoadedAudioFile) -> Result<Ve
                     .into_samples::<i32>()
                     .map(|sample| {
                         let sample = sample.expect("Failed to read .wav sample");
-                        sample as f32 / i32::MAX as f32
+                        // Normalize to f32
+                        (sample as f32 / i32::MAX as f32) * f32::MAX
                     })
                     .collect(),
             };
@@ -316,6 +393,21 @@ async fn preprocess_audio_file_to_pcm(audio_file: &LoadedAudioFile) -> Result<Ve
             if wav_spec.sample_rate != TARGET_SAMPLE_RATE {
                 wav_samples = resample(wav_samples.as_ref(), wav_spec.sample_rate)?;
             }
+            let final_seconds = wav_samples.len() as f32 / TARGET_SAMPLE_RATE as f32;
+            println!(
+                "Resampled {} to {} samples, for a duration of {} seconds",
+                get_file_name(&audio_file.file_path),
+                wav_samples.len(),
+                final_seconds
+            );
+            if (final_seconds - initial_seconds).abs() > 0.1 {
+                return Err(anyhow::anyhow!(
+                    "Resampled audio file {} has a duration of {} seconds, but should have a duration of {} seconds",
+                    get_file_name(&audio_file.file_path),
+                    final_seconds,
+                    initial_seconds
+                ));
+            }
             Ok(wav_samples)
         }
         _ => Err(anyhow::anyhow!(
@@ -327,30 +419,37 @@ async fn preprocess_audio_file_to_pcm(audio_file: &LoadedAudioFile) -> Result<Ve
 }
 
 fn resample(samples: &[f32], source_sample_rate: u32) -> Result<Vec<f32>> {
-    let params = SincInterpolationParameters {
-        sinc_len: 256,
-        f_cutoff: 0.95,
-        interpolation: SincInterpolationType::Linear,
-        oversampling_factor: 256,
-        window: WindowFunction::BlackmanHarris2,
-    };
-    let mut resampler = SincFixedIn::<f32>::new(
-        TARGET_SAMPLE_RATE as f64 / source_sample_rate as f64,
-        2.0,
-        params,
-        1024,
+    let initial_seconds = samples.len() as f32 / source_sample_rate as f32;
+    let mut resampler = FftFixedIn::<f32>::new(
+        source_sample_rate
+            .try_into()
+            .expect("source_sample_rate should be converted"),
+        TARGET_SAMPLE_RATE
+            .try_into()
+            .expect("TARGET_SAMPLE_RATE should be converted"),
+        samples.len(),
+        1,
         1,
     )
     .context("Failed to create resampler")?;
 
-    resampler
+    let resampled_samples = resampler
         .process(&[samples], None)
         .context("Failed to resample")
         .map(|res| {
             res.get(0)
                 .expect("Resampled audio should have 1 channel")
                 .to_vec()
-        })
+        })?;
+    let resampled_seconds = resampled_samples.len() as f32 / TARGET_SAMPLE_RATE as f32;
+    if (resampled_seconds - initial_seconds).abs() > 0.1 {
+        return Err(anyhow::anyhow!(
+            "During resampling, audio file with duration of {} seconds was resampled to {} seconds",
+            initial_seconds,
+            resampled_seconds
+        ));
+    }
+    Ok(resampled_samples)
 }
 
 fn split_audio_into_segments(pcm_audio: &[f32]) -> Vec<FileSegment> {
@@ -401,9 +500,9 @@ const TARGET_LENGTH: usize = 1001;
 fn reshape_mel_spec(mel_spec: Array2<f64>) -> Result<Array3<f64>> {
     println!("Reshaping mel_spec of shape {:?}", mel_spec.shape());
     let transposed_mel_spec = mel_spec.t().to_owned();
-    if (transposed_mel_spec.len_of(Axis(0)) == TARGET_LENGTH) {
+    if transposed_mel_spec.len_of(Axis(0)) == TARGET_LENGTH {
         return Ok(transposed_mel_spec.insert_axis(Axis(0)));
-    } else if (transposed_mel_spec.len_of(Axis(0)) == 0) {
+    } else if transposed_mel_spec.len_of(Axis(0)) == 0 {
         return Err(anyhow::anyhow!("Mel spectrogram is empty"));
     }
 
@@ -489,6 +588,10 @@ fn compute_mel_spec_from_pcm(segment_pcm: &[f32]) -> Result<Array3<f64>> {
 }
 
 #[test]
+fn test_int_to_float_cast() {
+    println!("{} -> {}", 15 as i32, (15 as i32) as f32);
+}
+#[test]
 fn test_compute_mel_spec_from_pcm_with_zeros() {
     // 10 seconds of 48kHz silence
     let test_segment_pcm = vec![0.0; 48000 * 10];
@@ -510,35 +613,61 @@ async fn compute_embedding_from_pcm(
 ) -> Result<Vec<f64>> {
     let mel_spec = compute_mel_spec_from_pcm(segment_pcm)?;
     // Compute embedding
-    let embedding = compute_embedding_from_mel_spec(mel_spec, audio_embedder).await;
+    let embedding = compute_embedding_from_mel_spec(mel_spec, audio_embedder).await?;
 
     Ok(embedding)
 }
 
-#[test]
-fn test_compute_embedding_from_pcm() {
-    // 10 seconds of 48kHz silence
-    let test_segment_pcm = vec![0.0; 48000 * 10];
-    // let test_audio_embedder = load_clap_models(tauri::PathResolver).unwrap().1;
-
-    // let result = compute_embedding_from_pcm(&test_segment_pcm, &test_audio_embedder).unwrap();
-
-    // println!("{:?}", result);
+fn create_local_audio_embedder() -> AudioEmbedder {
+    let audio_embedder_model_path =
+        get_local_path("onnx_models/clap-htsat-unfused_audio_with_projection.onnx")
+            .expect("Should get local path");
+    let environment = Environment::builder()
+        .with_name("CLAP")
+        .build()
+        .expect("Failed to create environment")
+        .into_arc();
+    let audio_embedder_session = SessionBuilder::new(&environment)
+        .expect("Failed to create session builder")
+        .with_optimization_level(GraphOptimizationLevel::Disable)
+        .expect("Failed to set optimization level")
+        .with_model_from_file(audio_embedder_model_path.clone())
+        .unwrap_or_else(|_| {
+            panic!(
+                "Failed to load audio embedder model from {}",
+                audio_embedder_model_path
+            )
+        });
+    AudioEmbedder::new(audio_embedder_session)
 }
+
+// #[tokio::test]
+// async fn test_compute_embedding_from_pcm() {
+//     // 10 seconds of 48kHz silence
+//     let test_segment_pcm = vec![0.0; 48000 * 10];
+//     let test_audio_embedder = create_local_audio_embedder();
+//     let process_queue_handle = tokio::spawn(test_audio_embedder.process_queue());
+//     let result = compute_embedding_from_pcm(&test_segment_pcm, &test_audio_embedder)
+//         .await
+//         .unwrap();
+
+//     tokio::join!(process_queue_handle);
+//     println!("{:?}", result);
+// }
 
 async fn compute_embedding_from_mel_spec(
     mel_spec: Array3<f64>,
     audio_embedder: &AudioEmbedder,
-) -> Vec<f64> {
+) -> Result<Vec<f64>> {
     println!(
         "Computing embedding for mel_spec of shape {:?}",
         mel_spec.shape()
     );
     let embedding = audio_embedder
         .queue_for_batch_processing(mel_spec.to_owned())
-        .await;
+        .await?;
 
-    embedding.to_vec()
+    Ok(embedding.to_vec())
 }
 
 pub fn get_search_results(search_string: &str, _pool: &SqlitePool) -> Result<Vec<String>> {
