@@ -91,7 +91,7 @@ button {
   cursor: pointer;
 }
 
-button:hover {
+button:hover:not(.disabled) {
   border-color: #396cd8;
 }
 button:active {
@@ -102,6 +102,22 @@ button:active {
 input,
 button {
   outline: none;
+}
+
+button.refresh-button {
+  position: absolute;
+  bottom: 1rem;
+  right: 1rem;
+  padding: 1rem;
+}
+
+button.refresh-button p {
+  margin: 0;
+}
+
+button.disabled {
+  opacity: 0.5;
+  cursor: unset;
 }
 
 #greet-input {

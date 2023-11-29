@@ -69,9 +69,6 @@ function App() {
       <div class="title">
         <h1>SonicSearch</h1>
         <h2>a search engine for your sounds</h2>
-        <button onClick={() => setRefreshCount(refreshCount() + 1)}>
-          <p>Refresh Index</p>
-        </button>
       </div>
 
       <form
@@ -110,7 +107,13 @@ function App() {
           </ul>
         </div>
       )}
-      {isIndexing() && <p>Indexing your files...</p>}
+      <button
+        onClick={() => setRefreshCount(refreshCount() + 1)}
+        disabled={isIndexing()}
+        class={isIndexing() ? "disabled refresh-button" : "refresh-button"}
+      >
+        <p>{isIndexing() ? "Indexing your files..." : "Refresh Index"}</p>
+      </button>
     </div>
   );
 }

@@ -1,7 +1,7 @@
 use futures::join;
 use hound::{SampleFormat, WavReader};
 use mel_spec::config::MelConfig;
-use mel_spec_pipeline::{Pipeline, PipelineConfig};
+use mel_spec_pipeline::{Pipeline, PipelineConfig, PipelineOutputBuffer};
 use ndarray::{concatenate, Array2, Array3, Axis};
 use rubato::{
     Resampler, SincFixedIn, SincInterpolationParameters, SincInterpolationType, WindowFunction,
@@ -22,6 +22,7 @@ use tauri::State;
 use twox_hash::XxHash64;
 use walkdir::WalkDir;
 
+use crate::clap::load_clap_models;
 use crate::state::{AppState, AudioEmbedder};
 
 fn compute_hash(file: &File) -> io::Result<String> {
@@ -225,7 +226,13 @@ async fn index_new_file(
             );
             let segment_embedding = compute_embedding_from_pcm(segment.pcm_audio, audio_embedder)
                 .await
-                .expect("Failed to compute embedding");
+                .expect(
+                    format!(
+                        "Failed to compute embedding for segment {} of {}",
+                        i, audio_file.file_path
+                    )
+                    .as_str(),
+                );
             FileSegmentWithEmbedding {
                 starting_timestamp: segment.starting_timestamp,
                 embedding: segment_embedding,
@@ -391,19 +398,26 @@ const MEL_CONFIG: MelConfigSettings = MelConfigSettings {
 };
 
 const TARGET_LENGTH: usize = 1001;
-fn reshape_mel_spec(mel_spec: Array2<f64>) -> Array3<f64> {
+fn reshape_mel_spec(mel_spec: Array2<f64>) -> Result<Array3<f64>> {
     println!("Reshaping mel_spec of shape {:?}", mel_spec.shape());
-    let mut result: Array2<f64> = mel_spec.clone();
-    while result.len_of(Axis(1)) < TARGET_LENGTH {
-        let result_len = result.len_of(Axis(1));
+    let transposed_mel_spec = mel_spec.t().to_owned();
+    if (transposed_mel_spec.len_of(Axis(0)) == TARGET_LENGTH) {
+        return Ok(transposed_mel_spec.insert_axis(Axis(0)));
+    } else if (transposed_mel_spec.len_of(Axis(0)) == 0) {
+        return Err(anyhow::anyhow!("Mel spectrogram is empty"));
+    }
+
+    let mut result: Array2<f64> = transposed_mel_spec.clone();
+    while result.len_of(Axis(0)) < TARGET_LENGTH {
+        let result_len = result.len_of(Axis(0));
         let padding_left = TARGET_LENGTH - result_len;
         let slice_bound = match padding_left > result_len {
             true => result_len,
             false => padding_left,
         };
 
-        let view_to_add = mel_spec.slice_axis(
-            Axis(1),
+        let view_to_add = transposed_mel_spec.slice_axis(
+            Axis(0),
             ndarray::Slice {
                 start: (0),
                 end: (Some(
@@ -414,10 +428,15 @@ fn reshape_mel_spec(mel_spec: Array2<f64>) -> Array3<f64> {
                 step: (1),
             },
         );
-        result = concatenate![Axis(1), result, view_to_add];
+        println!(
+            "Adding view of shape {:?} to result of shape {:?}",
+            view_to_add.shape(),
+            result.shape()
+        );
+        result = concatenate![Axis(0), result, view_to_add];
     }
 
-    result.insert_axis(Axis(0))
+    Ok(result.insert_axis(Axis(0)))
 }
 
 fn compute_mel_spec_from_pcm(segment_pcm: &[f32]) -> Result<Array3<f64>> {
@@ -439,17 +458,50 @@ fn compute_mel_spec_from_pcm(segment_pcm: &[f32]) -> Result<Array3<f64>> {
     let pipeline_join_handles = pipeline.start();
     let rx_clone = pipeline.rx();
     pipeline.send_pcm(segment_pcm)?;
-
-    let mel_spec_res = rx_clone.recv().map(|(_, mel_spec)| reshape_mel_spec(mel_spec)).map_err(|err| {
-        anyhow::format_err!("Failed to receive mel spectrogram from pipeline: {:?}", err)
-    });
-
     pipeline.close_ingress();
+
+    let mut mel_spec: Array2<f64> = Array2::zeros((MEL_CONFIG.n_mels, 0));
+    loop {
+        match rx_clone.recv() {
+            Ok((mel_idx, mel_spec_chunk)) => {
+                print!("\rReceived mel spectrogram chunk {:?}", mel_idx);
+                mel_spec
+                    .append(Axis(1), mel_spec_chunk.view())
+                    .context(format!(
+                "Failed to append mel spectrogram chunk of shape {:?} to mel_spec of shape {:?}",
+                mel_spec_chunk.shape(),
+                mel_spec.shape()
+            ))?;
+            }
+            Err(err) => {
+                println!("Failed to receive mel spectrogram chunk: {:?}", err);
+                break;
+            }
+        }
+    }
+
     for handle in pipeline_join_handles {
         handle.join().expect("Pipeline should join");
     }
-    
-    mel_spec_res
+
+    let reshaped_mel_spec = reshape_mel_spec(mel_spec).context("Failed to reshape mel spec")?;
+    Ok(reshaped_mel_spec)
+}
+
+#[test]
+fn test_compute_mel_spec_from_pcm_with_zeros() {
+    // 10 seconds of 48kHz silence
+    let test_segment_pcm = vec![0.0; 48000 * 10];
+    let result = compute_mel_spec_from_pcm(&test_segment_pcm);
+    println!("{:?}", result);
+}
+
+#[test]
+fn test_compute_mel_spec_from_pcm_with_no_length() {
+    // 0 seconds of 48kHz silence
+    let test_segment_pcm = vec![0.0; 0];
+    let result = compute_mel_spec_from_pcm(&test_segment_pcm);
+    println!("{:?}", result);
 }
 
 async fn compute_embedding_from_pcm(
@@ -461,6 +513,17 @@ async fn compute_embedding_from_pcm(
     let embedding = compute_embedding_from_mel_spec(mel_spec, audio_embedder).await;
 
     Ok(embedding)
+}
+
+#[test]
+fn test_compute_embedding_from_pcm() {
+    // 10 seconds of 48kHz silence
+    let test_segment_pcm = vec![0.0; 48000 * 10];
+    // let test_audio_embedder = load_clap_models(tauri::PathResolver).unwrap().1;
+
+    // let result = compute_embedding_from_pcm(&test_segment_pcm, &test_audio_embedder).unwrap();
+
+    // println!("{:?}", result);
 }
 
 async fn compute_embedding_from_mel_spec(
