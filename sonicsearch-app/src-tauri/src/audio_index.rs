@@ -14,7 +14,6 @@ use std::{
     io::{self, BufReader, Read},
     path::Path,
 };
-use tokio::try_join;
 
 use anyhow::{Context, Result};
 use futures::future::join_all;
@@ -23,7 +22,7 @@ use tauri::State;
 use twox_hash::XxHash64;
 use walkdir::WalkDir;
 
-use crate::state::{AppState, AudioEmbedder};
+use crate::state::{audio_embedder::AudioEmbedder, AppState};
 
 fn compute_hash(file: &File) -> io::Result<String> {
     let hash_seed = 1023489u64;
@@ -316,19 +315,99 @@ async fn test_segment_and_embed_file() {
     };
     let test_audio_embedder = Arc::new(create_local_audio_embedder());
 
-    let process_queue = tokio::spawn({
+    tokio::spawn({
         let cloned_audio_embedder = test_audio_embedder.clone();
         async move { cloned_audio_embedder.to_owned().process_queue().await }
     });
-    let segment_and_embed = tokio::spawn({
+    let segment_and_embed_future = tokio::spawn({
         let cloned_audio_embedder = test_audio_embedder.clone();
         async move { segment_and_embed_file(&test_audio_file, &cloned_audio_embedder).await }
     });
 
-    let (process_result, embed_result) =
-        try_join!(process_queue, segment_and_embed).expect("Should join futures");
-    println!("{:?}", process_result);
-    println!("{:?}", embed_result);
+    let segment_and_embed_result = segment_and_embed_future
+        .await
+        .expect("Segment and embed should succeed");
+    println!("Segment and embed result: {:?}", segment_and_embed_result);
+    println!("Done :)")
+}
+
+#[tokio::test]
+async fn test_segment_and_embed_5_files() {
+    let audio_filenames = [
+        "audio_00.wav",
+        "audio_01.wav",
+        "audio_02.wav",
+        "audio_03.wav",
+        "audio_04.wav",
+    ];
+    test_segment_and_embed_from_filenames(audio_filenames.to_vec()).await;
+}
+
+#[tokio::test]
+async fn test_segment_and_embed_50_files() {
+    let audio_filenames = [
+        "audio_00.wav",
+        "audio_01.wav",
+        "audio_02.wav",
+        "audio_03.wav",
+        "audio_04.wav",
+    ]
+    .repeat(10);
+    test_segment_and_embed_from_filenames(audio_filenames).await;
+}
+
+/// Generic testing process. Takes a list of filenames expected to be present in the test_resources/audio directory.
+async fn test_segment_and_embed_from_filenames(audio_filenames: Vec<&str>) {
+    let test_audio_files: Vec<Arc<_>> = audio_filenames
+        .iter()
+        .map(|filename| {
+            Arc::new(LoadedAudioFile {
+                file_hash: "fake_hash".to_string(),
+                file_path: get_local_path(("test_resources/audio/".to_owned() + filename).as_str())
+                    .expect("Should get local path"),
+                file: None,
+            })
+        })
+        .collect();
+    let test_audio_embedder = Arc::new(create_local_audio_embedder());
+
+    tokio::spawn({
+        let cloned_audio_embedder = test_audio_embedder.clone();
+        async move { cloned_audio_embedder.to_owned().process_queue().await }
+    });
+    let segment_and_embed_futures: Vec<_> =
+        test_audio_files
+            .iter()
+            .map(|test_audio_file| {
+                let cloned_audio_embedder = test_audio_embedder.clone();
+                let cloned_audio_file = test_audio_file.clone();
+                tokio::spawn({
+                    async move {
+                        segment_and_embed_file(&cloned_audio_file, &cloned_audio_embedder).await
+                    }
+                })
+            })
+            .collect();
+
+    let segment_and_embed_result = join_all(segment_and_embed_futures).await;
+
+    let segment_and_embed_result = segment_and_embed_result
+        .iter()
+        .map(|res| res.as_ref().expect("Segment and embed should succeed"))
+        .collect::<Vec<_>>();
+    let segment_and_embed_result = segment_and_embed_result
+        .iter()
+        .map(|res| res.as_ref().expect("Segment and embed should succeed"))
+        .collect::<Vec<_>>();
+    println!("Embedded {} files", segment_and_embed_result.len());
+    println!(
+        "Embedded a total of {} segments",
+        segment_and_embed_result
+            .iter()
+            .map(|file| file.len())
+            .sum::<usize>()
+    );
+    println!("Done :)")
 }
 
 const TARGET_SAMPLE_RATE: u32 = 48000;
@@ -420,6 +499,10 @@ async fn preprocess_audio_file_to_pcm(audio_file: &LoadedAudioFile) -> Result<Ve
 
 fn resample(samples: &[f32], source_sample_rate: u32) -> Result<Vec<f32>> {
     let initial_seconds = samples.len() as f32 / source_sample_rate as f32;
+
+    const CHANNELS: usize = 1;
+    const CHUNK_SIZE_IN: usize = 1024;
+    const DESIRED_SUBCHUNKS: usize = 2;
     let mut resampler = FftFixedIn::<f32>::new(
         source_sample_rate
             .try_into()
@@ -427,24 +510,46 @@ fn resample(samples: &[f32], source_sample_rate: u32) -> Result<Vec<f32>> {
         TARGET_SAMPLE_RATE
             .try_into()
             .expect("TARGET_SAMPLE_RATE should be converted"),
-        samples.len(),
-        1,
-        1,
+        CHUNK_SIZE_IN,
+        DESIRED_SUBCHUNKS,
+        CHANNELS,
     )
     .context("Failed to create resampler")?;
+    // Prepare
+    let mut resampled_samples: Vec<f32> = vec![];
 
-    let resampled_samples = resampler
-        .process(&[samples], None)
-        .context("Failed to resample")
-        .map(|res| {
-            res.get(0)
-                .expect("Resampled audio should have 1 channel")
-                .to_vec()
-        })?;
+    samples
+        .chunks(CHUNK_SIZE_IN)
+        .map(|sample_chunk| {
+            print!("\rResampling chunk of size {:?}", sample_chunk.len());
+            // Process
+            if sample_chunk.len() < CHUNK_SIZE_IN {
+                resampled_samples.append(
+                    &mut resampler
+                        .process_partial(Some(&[sample_chunk]), None)?
+                        .get(0)
+                        .context("Failed to get channel 0 of partial resample chunk")?
+                        .to_vec(),
+                )
+            } else {
+                resampled_samples.append(
+                    &mut resampler
+                        .process(&[sample_chunk], None)?
+                        .get(0)
+                        .context("Failed to get channel 0 of resample chunk")?
+                        .to_vec(),
+                );
+            }
+            Ok(())
+        })
+        .collect::<Result<Vec<_>>>()
+        .context("Failed while resampling")?;
+    println!();
+
     let resampled_seconds = resampled_samples.len() as f32 / TARGET_SAMPLE_RATE as f32;
     if (resampled_seconds - initial_seconds).abs() > 0.1 {
         return Err(anyhow::anyhow!(
-            "During resampling, audio file with duration of {} seconds was resampled to {} seconds",
+            "Audio file with duration of {} seconds was resampled to {} seconds",
             initial_seconds,
             resampled_seconds
         ));
@@ -640,20 +745,6 @@ fn create_local_audio_embedder() -> AudioEmbedder {
         });
     AudioEmbedder::new(audio_embedder_session)
 }
-
-// #[tokio::test]
-// async fn test_compute_embedding_from_pcm() {
-//     // 10 seconds of 48kHz silence
-//     let test_segment_pcm = vec![0.0; 48000 * 10];
-//     let test_audio_embedder = create_local_audio_embedder();
-//     let process_queue_handle = tokio::spawn(test_audio_embedder.process_queue());
-//     let result = compute_embedding_from_pcm(&test_segment_pcm, &test_audio_embedder)
-//         .await
-//         .unwrap();
-
-//     tokio::join!(process_queue_handle);
-//     println!("{:?}", result);
-// }
 
 async fn compute_embedding_from_mel_spec(
     mel_spec: Array3<f64>,

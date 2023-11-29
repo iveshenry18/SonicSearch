@@ -12,7 +12,7 @@ use futures::lock::Mutex;
 
 use audio_index::{get_search_results, update_audio_index};
 use sqlx::SqlitePool;
-use state::{AppState, AudioEmbedder};
+use state::{audio_embedder::AudioEmbedder, AppState};
 use tauri::{async_runtime::RwLock, Manager};
 
 #[tauri::command]
