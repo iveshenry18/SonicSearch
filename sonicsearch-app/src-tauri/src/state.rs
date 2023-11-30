@@ -1,4 +1,5 @@
 pub mod audio_embedder;
+pub mod database;
 use std::sync::Arc;
 
 use futures::lock::Mutex;

@@ -6,6 +6,21 @@ use sqlite_vss::{sqlite3_vector_init, sqlite3_vss_init};
 use sqlx::SqlitePool;
 use tauri::AppHandle;
 
+/// This is a manual trigger function to update the vss_audio_file_segment
+/// virtual table with values from the audio_file_segment table.
+pub async fn synchronize_audio_file_segment_vss(pool: &SqlitePool) -> Result<()> {
+    // Cannot use macro here because virtual table is not part of
+    // the sqlx-managed migration
+    sqlx::query(
+        r#"INSERT INTO vss_audio_file_segment (rowid, embedding)
+            SELECT rowid, embedding FROM audio_file_segment"#,
+    )
+    .execute(pool)
+    .await
+    .context("Failed to update vss_audio_file_segment: {:?}")?;
+    Ok(())
+}
+
 const EMBEDDING_SIZE: u16 = 512;
 
 pub async fn initialize_database(app_handle: &AppHandle) -> Result<SqlitePool> {
@@ -27,34 +42,7 @@ pub async fn initialize_database(app_handle: &AppHandle) -> Result<SqlitePool> {
         .await
         .context("Failed to open database")?;
 
-    sqlx::query!(r#"DROP TABLE IF EXISTS audio_file;"#,)
-        .execute(&pool)
-        .await?;
-    sqlx::query!(
-        r#"CREATE TABLE IF NOT EXISTS audio_file (
-            file_hash TEXT PRIMARY KEY NOT NULL,
-            file_path TEXT NOT NULL
-        )"#,
-    )
-    .execute(&pool)
-    .await?;
-
-    sqlx::query(r#"DROP TABLE IF EXISTS audio_file_segment;"#)
-        .execute(&pool)
-        .await?;
-    // Persistent embedding data
-    sqlx::query(
-        r#"CREATE TABLE IF NOT EXISTS audio_file_segment (
-            file_hash TEXT NOT NULL,
-            starting_timestamp REAL NOT NULL,            
-            embedding BLOB NOT NULL,
-            FOREIGN KEY (file_hash) REFERENCES audio_file(file_hash),
-            PRIMARY KEY (file_hash, starting_timestamp)
-        )"#,
-    )
-    .execute(&pool)
-    .await?;
-    // Virtual (in-memory) table for vector search using sqlite-vss
+    sqlx::migrate!().run(&pool).await?;
     sqlx::query(
         r#"CREATE VIRTUAL TABLE IF NOT EXISTS vss_audio_file_segment USING vss0(
             embedding(?)
@@ -63,12 +51,8 @@ pub async fn initialize_database(app_handle: &AppHandle) -> Result<SqlitePool> {
     .bind(EMBEDDING_SIZE)
     .execute(&pool)
     .await?;
-    sqlx::query(
-        r#"INSERT INTO vss_audio_file_segment
-            SELECT embedding FROM audio_file_segment"#,
-    )
-    .execute(&pool)
-    .await?;
+
+    synchronize_audio_file_segment_vss(&pool).await?;
 
     println!("SonicSearch.db created and initialized.");
 

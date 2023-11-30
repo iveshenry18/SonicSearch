@@ -3,7 +3,6 @@
 
 mod audio_index;
 mod clap;
-mod database;
 mod state;
 
 use std::sync::Arc;
@@ -12,7 +11,7 @@ use futures::lock::Mutex;
 
 use audio_index::{get_search_results, update_audio_index};
 use sqlx::SqlitePool;
-use state::{audio_embedder::AudioEmbedder, AppState};
+use state::{audio_embedder::AudioEmbedder, AppState, database};
 use tauri::{async_runtime::RwLock, Manager};
 
 #[tauri::command]

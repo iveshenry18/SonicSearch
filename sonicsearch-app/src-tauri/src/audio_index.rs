@@ -20,6 +20,7 @@ use tauri::State;
 use twox_hash::XxHash64;
 use walkdir::WalkDir;
 
+use crate::state::database::synchronize_audio_file_segment_vss;
 use crate::state::{audio_embedder::AudioEmbedder, AppState};
 
 fn compute_hash(file: &File) -> io::Result<String> {
@@ -59,7 +60,10 @@ pub async fn update_audio_index(app_state: State<'_, AppState>) -> result::Resul
     } else {
         *is_indexing = true;
     }
-    let user_audio_dir = dirs::audio_dir().expect("Failed to get user home directory");
+    // TODO: make this configurable
+    let user_audio_dir = dirs::home_dir()
+        .expect("Failed to get user home directory")
+        .join("sonicsearchtestaudio");
     let audio_embedder = &app_state.clap_model_audio_embedder;
     let pool = app_state.pool.clone();
 
@@ -108,13 +112,9 @@ pub async fn update_audio_index(app_state: State<'_, AppState>) -> result::Resul
         upsert_results.1.len()
     );
 
-    sqlx::query(
-        r#"INSERT INTO vss_audio_file_segment
-            SELECT embedding FROM audio_file_segment"#,
-    )
-    .execute(&app_state.pool)
-    .await
-    .map_err(|err| format!("Failed to update vss_audio_file_segment: {:?}", err))?;
+    synchronize_audio_file_segment_vss(&app_state.pool)
+        .await
+        .map_err(|err| format!("Failed to synchronize audio file segment vss: {:?}", err))?;
 
     println!("\nAudio file index updated.");
     *is_indexing = false;
@@ -124,11 +124,10 @@ pub async fn update_audio_index(app_state: State<'_, AppState>) -> result::Resul
 struct LoadedAudioFile {
     file_hash: String,
     file_path: String,
-    file: Option<File>,
 }
 
+#[derive(sqlx::FromRow)]
 struct AudioFileRow {
-    file_hash: String,
     file_path: String,
 }
 
@@ -142,11 +141,13 @@ pub async fn upsert_audio_file(
     let audio_file = LoadedAudioFile {
         file_hash: compute_hash(&file).context("Failed to compute hash")?,
         file_path: path.to_string_lossy().into_owned(),
-        file: Some(file),
     };
+
+    // Save some memory :)
+    drop(file);
     let existing_row = sqlx::query_as!(
         AudioFileRow,
-        r#"SELECT * FROM audio_file WHERE file_hash = ?"#,
+        r#"SELECT file_path FROM audio_file WHERE file_hash = ?"#,
         audio_file.file_hash
     )
     .fetch_optional(&pool)
@@ -210,7 +211,7 @@ async fn index_new_file(
         segments_with_embeddings.len(),
         audio_file.file_path
     );
-    pool.begin().await?;
+    let sql_transaction = pool.begin().await?;
     sqlx::query!(
         r#"INSERT INTO audio_file (file_hash, file_path) VALUES (?, ?)"#,
         audio_file.file_hash,
@@ -230,6 +231,7 @@ async fn index_new_file(
             .execute(&pool)
             .await.expect("Segment insertion should succeed");
     })).await;
+    sql_transaction.commit().await?;
 
     Ok(1)
 }
@@ -318,7 +320,8 @@ async fn preprocess_audio_file_to_pcm(audio_file: &LoadedAudioFile) -> Result<Ve
         "wav" => {
             let wav_reader =
                 // TODO: this probably redundantly opens the file, which can take a while.
-                // Easy perf win: use audio_file.file instead.
+                // If memory constraints permit, we should go back to storing the file in audio_file.file
+                // and using that here for I/O gains.
                 WavReader::open(&audio_file.file_path).context("Failed to read .wav file")?;
             let wav_spec = wav_reader.spec();
             let initial_seconds = wav_reader.duration() as f32 / wav_spec.sample_rate as f32;
@@ -547,23 +550,15 @@ fn compute_mel_spec_from_pcm(segment_pcm: &[f32]) -> Result<Array3<f64>> {
     pipeline.close_ingress();
 
     let mut mel_spec: Array2<f64> = Array2::zeros((MEL_CONFIG.n_mels, 0));
-    loop {
-        match rx_clone.recv() {
-            Ok((mel_idx, mel_spec_chunk)) => {
-                print!("\rReceived mel spectrogram chunk {:?}", mel_idx);
-                mel_spec
-                    .append(Axis(1), mel_spec_chunk.view())
-                    .context(format!(
+    while let Ok((mel_idx, mel_spec_chunk)) = rx_clone.recv() {
+        print!("\rReceived mel spectrogram chunk {:?}", mel_idx);
+        mel_spec
+            .append(Axis(1), mel_spec_chunk.view())
+            .context(format!(
                 "Failed to append mel spectrogram chunk of shape {:?} to mel_spec of shape {:?}",
                 mel_spec_chunk.shape(),
                 mel_spec.shape()
             ))?;
-            }
-            Err(err) => {
-                println!("Failed to receive mel spectrogram chunk: {:?}", err);
-                break;
-            }
-        }
     }
 
     for handle in pipeline_join_handles {
@@ -704,7 +699,6 @@ mod tests {
                         ("test_resources/audio/".to_owned() + filename).as_str(),
                     )
                     .expect("Should get local path"),
-                    file: None,
                 })
             })
             .collect();

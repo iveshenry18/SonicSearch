@@ -16,3 +16,5 @@ This app isn't exactly... portable yet. For now you need at least a few binaries
 1. llvm: `brew install llvm`
 
 You'll also need to create the appropriate onnx models to populate the `SonicSearch/src-tauri/onnx_models` directory. That should be achievable simply by running all cells of `clap_export/clap_export.ipynb`.
+
+Oh you'll also need to set up the [sqlx cli](https://github.com/launchbadge/sqlx/blob/main/sqlx-cli/README.md#enable-building-in-offline-mode-with-query)
