@@ -3,11 +3,9 @@ use hound::{SampleFormat, WavReader};
 use mel_spec::config::MelConfig;
 use mel_spec_pipeline::{Pipeline, PipelineConfig};
 use ndarray::{concatenate, Array2, Array3, Axis};
-use ort::{Environment, GraphOptimizationLevel, SessionBuilder};
 use rubato::{FftFixedIn, Resampler};
 use std::hash::Hasher;
 use std::path::PathBuf;
-use std::sync::Arc;
 use std::{cmp, result};
 use std::{
     fs::File,
@@ -294,122 +292,6 @@ async fn segment_and_embed_file(
     segments_with_embeddings
 }
 
-/// Get local path for testing, based on CARGO_MANIFEST_DIR env var
-fn get_local_path(path: &str) -> Result<String> {
-    let mut local_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    local_path.push(path);
-    let local_path_string = local_path
-        .into_os_string()
-        .into_string()
-        .expect("Should be able to convert path to string");
-    Ok(local_path_string)
-}
-
-#[tokio::test]
-async fn test_segment_and_embed_file() {
-    let test_audio_file = LoadedAudioFile {
-        file_hash: "fake_hash".to_string(),
-        file_path: get_local_path("test_resources/audio/audio_00.wav")
-            .expect("Should get local path"),
-        file: None,
-    };
-    let test_audio_embedder = Arc::new(create_local_audio_embedder());
-
-    tokio::spawn({
-        let cloned_audio_embedder = test_audio_embedder.clone();
-        async move { cloned_audio_embedder.to_owned().process_queue().await }
-    });
-    let segment_and_embed_future = tokio::spawn({
-        let cloned_audio_embedder = test_audio_embedder.clone();
-        async move { segment_and_embed_file(&test_audio_file, &cloned_audio_embedder).await }
-    });
-
-    let segment_and_embed_result = segment_and_embed_future
-        .await
-        .expect("Segment and embed should succeed");
-    println!("Segment and embed result: {:?}", segment_and_embed_result);
-    println!("Done :)")
-}
-
-#[tokio::test]
-async fn test_segment_and_embed_5_files() {
-    let audio_filenames = [
-        "audio_00.wav",
-        "audio_01.wav",
-        "audio_02.wav",
-        "audio_03.wav",
-        "audio_04.wav",
-    ];
-    test_segment_and_embed_from_filenames(audio_filenames.to_vec()).await;
-}
-
-#[tokio::test]
-async fn test_segment_and_embed_50_files() {
-    let audio_filenames = [
-        "audio_00.wav",
-        "audio_01.wav",
-        "audio_02.wav",
-        "audio_03.wav",
-        "audio_04.wav",
-    ]
-    .repeat(10);
-    test_segment_and_embed_from_filenames(audio_filenames).await;
-}
-
-/// Generic testing process. Takes a list of filenames expected to be present in the test_resources/audio directory.
-async fn test_segment_and_embed_from_filenames(audio_filenames: Vec<&str>) {
-    let test_audio_files: Vec<Arc<_>> = audio_filenames
-        .iter()
-        .map(|filename| {
-            Arc::new(LoadedAudioFile {
-                file_hash: "fake_hash".to_string(),
-                file_path: get_local_path(("test_resources/audio/".to_owned() + filename).as_str())
-                    .expect("Should get local path"),
-                file: None,
-            })
-        })
-        .collect();
-    let test_audio_embedder = Arc::new(create_local_audio_embedder());
-
-    tokio::spawn({
-        let cloned_audio_embedder = test_audio_embedder.clone();
-        async move { cloned_audio_embedder.to_owned().process_queue().await }
-    });
-    let segment_and_embed_futures: Vec<_> =
-        test_audio_files
-            .iter()
-            .map(|test_audio_file| {
-                let cloned_audio_embedder = test_audio_embedder.clone();
-                let cloned_audio_file = test_audio_file.clone();
-                tokio::spawn({
-                    async move {
-                        segment_and_embed_file(&cloned_audio_file, &cloned_audio_embedder).await
-                    }
-                })
-            })
-            .collect();
-
-    let segment_and_embed_result = join_all(segment_and_embed_futures).await;
-
-    let segment_and_embed_result = segment_and_embed_result
-        .iter()
-        .map(|res| res.as_ref().expect("Segment and embed should succeed"))
-        .collect::<Vec<_>>();
-    let segment_and_embed_result = segment_and_embed_result
-        .iter()
-        .map(|res| res.as_ref().expect("Segment and embed should succeed"))
-        .collect::<Vec<_>>();
-    println!("Embedded {} files", segment_and_embed_result.len());
-    println!(
-        "Embedded a total of {} segments",
-        segment_and_embed_result
-            .iter()
-            .map(|file| file.len())
-            .sum::<usize>()
-    );
-    println!("Done :)")
-}
-
 const TARGET_SAMPLE_RATE: u32 = 48000;
 const SEGMENT_LENGTH: f32 = 10.0; // seconds
 const SEGMENT_STEP: f32 = 5.0; // seconds
@@ -692,26 +574,6 @@ fn compute_mel_spec_from_pcm(segment_pcm: &[f32]) -> Result<Array3<f64>> {
     Ok(reshaped_mel_spec)
 }
 
-#[test]
-fn test_int_to_float_cast() {
-    println!("{} -> {}", 15 as i32, (15 as i32) as f32);
-}
-#[test]
-fn test_compute_mel_spec_from_pcm_with_zeros() {
-    // 10 seconds of 48kHz silence
-    let test_segment_pcm = vec![0.0; 48000 * 10];
-    let result = compute_mel_spec_from_pcm(&test_segment_pcm);
-    println!("{:?}", result);
-}
-
-#[test]
-fn test_compute_mel_spec_from_pcm_with_no_length() {
-    // 0 seconds of 48kHz silence
-    let test_segment_pcm = vec![0.0; 0];
-    let result = compute_mel_spec_from_pcm(&test_segment_pcm);
-    println!("{:?}", result);
-}
-
 async fn compute_embedding_from_pcm(
     segment_pcm: &[f32],
     audio_embedder: &AudioEmbedder,
@@ -721,29 +583,6 @@ async fn compute_embedding_from_pcm(
     let embedding = compute_embedding_from_mel_spec(mel_spec, audio_embedder).await?;
 
     Ok(embedding)
-}
-
-fn create_local_audio_embedder() -> AudioEmbedder {
-    let audio_embedder_model_path =
-        get_local_path("onnx_models/clap-htsat-unfused_audio_with_projection.onnx")
-            .expect("Should get local path");
-    let environment = Environment::builder()
-        .with_name("CLAP")
-        .build()
-        .expect("Failed to create environment")
-        .into_arc();
-    let audio_embedder_session = SessionBuilder::new(&environment)
-        .expect("Failed to create session builder")
-        .with_optimization_level(GraphOptimizationLevel::Disable)
-        .expect("Failed to set optimization level")
-        .with_model_from_file(audio_embedder_model_path.clone())
-        .unwrap_or_else(|_| {
-            panic!(
-                "Failed to load audio embedder model from {}",
-                audio_embedder_model_path
-            )
-        });
-    AudioEmbedder::new(audio_embedder_session)
 }
 
 async fn compute_embedding_from_mel_spec(
@@ -765,4 +604,147 @@ pub fn get_search_results(search_string: &str, _pool: &SqlitePool) -> Result<Vec
     // Stubbed search algorithm: pick 10 random audio files
 
     Ok(vec![format!("~/{}", search_string.to_owned()).to_string()])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use ort::{Environment, GraphOptimizationLevel, SessionBuilder};
+    use std::sync::Arc;
+
+    #[tokio::test]
+    async fn test_segment_and_embed_file() {
+        test_segment_and_embed_from_filenames(["audio_00.wav"].to_vec()).await
+    }
+
+    #[tokio::test]
+    async fn test_segment_and_embed_5_files() {
+        let audio_filenames = [
+            "audio_00.wav",
+            "audio_01.wav",
+            "audio_02.wav",
+            "audio_03.wav",
+            "audio_04.wav",
+        ];
+        test_segment_and_embed_from_filenames(audio_filenames.to_vec()).await;
+    }
+
+    #[tokio::test]
+    async fn test_segment_and_embed_50_files() {
+        let audio_filenames = [
+            "audio_00.wav",
+            "audio_01.wav",
+            "audio_02.wav",
+            "audio_03.wav",
+            "audio_04.wav",
+        ]
+        .repeat(10);
+        test_segment_and_embed_from_filenames(audio_filenames).await;
+    }
+
+    #[test]
+    fn test_compute_mel_spec_from_pcm_with_zeros() {
+        // 10 seconds of 48kHz silence
+        let test_segment_pcm = vec![0.0; 48000 * 10];
+        let result = compute_mel_spec_from_pcm(&test_segment_pcm);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_compute_mel_spec_from_pcm_with_no_length() {
+        // 0 seconds of 48kHz silence
+        let test_segment_pcm = vec![0.0; 0];
+        let result = compute_mel_spec_from_pcm(&test_segment_pcm);
+        assert!(result.is_err());
+    }
+
+    /// Get local path for testing, based on CARGO_MANIFEST_DIR env var
+    fn get_local_path(path: &str) -> Result<String> {
+        let mut local_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        local_path.push(path);
+        let local_path_string = local_path
+            .into_os_string()
+            .into_string()
+            .expect("Should be able to convert path to string");
+        Ok(local_path_string)
+    }
+
+    fn create_local_audio_embedder() -> AudioEmbedder {
+        let audio_embedder_model_path =
+            get_local_path("onnx_models/clap-htsat-unfused_audio_with_projection.onnx")
+                .expect("Should get local path");
+        let environment = Environment::builder()
+            .with_name("CLAP")
+            .build()
+            .expect("Failed to create environment")
+            .into_arc();
+        let audio_embedder_session = SessionBuilder::new(&environment)
+            .expect("Failed to create session builder")
+            .with_optimization_level(GraphOptimizationLevel::Disable)
+            .expect("Failed to set optimization level")
+            .with_model_from_file(audio_embedder_model_path.clone())
+            .unwrap_or_else(|_| {
+                panic!(
+                    "Failed to load audio embedder model from {}",
+                    audio_embedder_model_path
+                )
+            });
+        AudioEmbedder::new(audio_embedder_session)
+    }
+
+    /// Generic testing process. Takes a list of filenames expected to be present in the test_resources/audio directory.
+    async fn test_segment_and_embed_from_filenames(audio_filenames: Vec<&str>) {
+        let test_audio_files: Vec<Arc<_>> = audio_filenames
+            .iter()
+            .map(|filename| {
+                Arc::new(LoadedAudioFile {
+                    file_hash: "fake_hash".to_string(),
+                    file_path: get_local_path(
+                        ("test_resources/audio/".to_owned() + filename).as_str(),
+                    )
+                    .expect("Should get local path"),
+                    file: None,
+                })
+            })
+            .collect();
+        let test_audio_embedder = Arc::new(create_local_audio_embedder());
+
+        tokio::spawn({
+            let cloned_audio_embedder = test_audio_embedder.clone();
+            async move { cloned_audio_embedder.to_owned().process_queue().await }
+        });
+        let segment_and_embed_futures: Vec<_> = test_audio_files
+            .iter()
+            .map(|test_audio_file| {
+                let cloned_audio_embedder = test_audio_embedder.clone();
+                let cloned_audio_file = test_audio_file.clone();
+                tokio::spawn({
+                    async move {
+                        segment_and_embed_file(&cloned_audio_file, &cloned_audio_embedder).await
+                    }
+                })
+            })
+            .collect();
+
+        let segment_and_embed_result = join_all(segment_and_embed_futures).await;
+
+        let segment_and_embed_result = segment_and_embed_result
+            .iter()
+            .map(|res| res.as_ref().expect("Segment and embed should succeed"))
+            .collect::<Vec<_>>();
+        let segment_and_embed_result = segment_and_embed_result
+            .iter()
+            .map(|res| res.as_ref().expect("Segment and embed should succeed"))
+            .collect::<Vec<_>>();
+        assert_eq!(segment_and_embed_result.len(), audio_filenames.len());
+        println!("Embedded {} files", segment_and_embed_result.len());
+        let segments_embedded = segment_and_embed_result
+            .iter()
+            .map(|segments| segments.len())
+            .sum::<usize>();
+        assert!(segments_embedded >= audio_filenames.len());
+        println!("Embedded a total of {} segments", segments_embedded);
+        println!("Done :)")
+    }
 }

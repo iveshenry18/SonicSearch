@@ -118,11 +118,7 @@ impl AudioEmbedder {
             );
 
             for (output, sender) in outputs.into_iter().zip(senders.into_iter()) {
-                println!(
-                    "Sending output of shape {:?} to sender {:?}",
-                    output.shape(),
-                    sender
-                );
+                println!("Sending output of shape {:?} to sender", output.shape());
                 sender
                     .send(output.mapv(f64::from))
                     .expect("Failed to send output");
