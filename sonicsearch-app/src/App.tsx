@@ -20,8 +20,7 @@ function App() {
 
   async function updateAudioIndex() {
     setIsIndexing(true);
-    const res = await invoke("update_audio_index");
-    console.debug(res);
+    await invoke("update_audio_index");
     setIsIndexing(false);
   }
 
@@ -48,20 +47,24 @@ function App() {
   });
 
   async function search() {
-    // Learn more about Tauri commands at https://tauri.app/v1/guides/features/command
-    const res = await invoke<string[]>("search", {
-      searchString: searchString(),
+    const currentSearchString = searchString();
+    console.log(`Searching for ${currentSearchString}`);
+    const res = await invoke("search_index", {
+      searchString: currentSearchString,
     });
-    const processedRes = await Promise.all(
-      res.map(
-        async (fullPath) =>
-          ({
-            fullPath,
-            basename: await basename(fullPath),
-          } satisfies ProcessedSearchResult)
-      )
-    );
-    setSearchResults(processedRes);
+
+    console.log(res);
+
+    // const processedRes = await Promise.all(
+    //   res.map(async (res) => {
+    //     console.debug(res);
+    //     return {
+    //       fullPath: res.full,
+    //       basename: await basename(res),
+    //     } satisfies ProcessedSearchResult;
+    //   })
+    // );
+    // setSearchResults(processedRes);
   }
 
   return (

@@ -8,7 +8,7 @@ use tokio::sync::{
     Notify,
 };
 
-pub struct MelSpecAndSender(Array3<f64>, Sender<Array1<f64>>);
+pub struct MelSpecAndSender(Array3<f64>, Sender<Array1<f32>>);
 
 pub struct AudioEmbedder {
     pub(crate) session: Arc<Mutex<Session>>,
@@ -33,7 +33,7 @@ impl AudioEmbedder {
     /// Other threads can call this to queue up audio for batch processing.
     /// This is a blocking call that will wait until the input has been processed,
     /// then return the output for the given input.
-    pub async fn queue_for_batch_processing(&self, input: Array3<f64>) -> Result<Array1<f64>> {
+    pub async fn queue_for_batch_processing(&self, input: Array3<f64>) -> Result<Array1<f32>> {
         let (sender, receiver) = oneshot::channel();
 
         {
@@ -64,12 +64,10 @@ impl AudioEmbedder {
                 inputs_to_process.append(input_queue.as_mut());
             }
             if inputs_to_process.is_empty() {
-                // TODO: Each batch of size n produces n notifies but only consumes 1
-                // So this block runs an extra n-1 times after the queue is empty
                 print!("No inputs to process. ");
-                // block until either self.queue_has_contents.notified() or self.stop_processing_queue.cancelled()
-                // if queue_has_contents is notified, then we should continue processing
-                // if stop_processing_queue is cancelled, then we should break
+                // block until either queue_has_contents or stop_processing_queue notifies
+                // if queue_has_contents is notified, then we continue processing
+                // if stop_processing_queue is notified, then we break
                 tokio::select! {
                     _ = self.queue_has_contents.notified() => {
                         // Continue processing
@@ -83,7 +81,7 @@ impl AudioEmbedder {
             }
 
             println!("Embedding {} input(s)", inputs_to_process.len());
-            let (input_batch, senders): (Vec<Array3<f64>>, Vec<Sender<Array1<f64>>>) =
+            let (input_batch, senders): (Vec<Array3<f64>>, Vec<Sender<Array1<f32>>>) =
                 inputs_to_process
                     .into_iter()
                     .map(|MelSpecAndSender(input, sender)| (input, sender))
@@ -134,7 +132,7 @@ impl AudioEmbedder {
             for (output, sender) in outputs.into_iter().zip(senders.into_iter()) {
                 println!("Sending output of shape {:?} to sender", output.shape());
                 sender
-                    .send(output.mapv(f64::from))
+                    .send(output)
                     .expect("Failed to send output");
                 println!("Sent output");
             }

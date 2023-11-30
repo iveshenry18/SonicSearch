@@ -21,6 +21,7 @@ use tauri::State;
 use twox_hash::XxHash64;
 use walkdir::WalkDir;
 
+use crate::clap::encode_embedding;
 use crate::state::database::synchronize_audio_file_segment_vss;
 use crate::state::{audio_embedder::AudioEmbedder, AppState};
 
@@ -200,7 +201,7 @@ struct FileSegment<'a> {
 #[derive(Debug)]
 struct FileSegmentWithEmbedding {
     starting_timestamp: f64,
-    embedding: Vec<f64>,
+    embedding: Vec<f32>,
 }
 
 async fn index_new_file(
@@ -229,7 +230,7 @@ async fn index_new_file(
     .await?;
     join_all(segments_with_embeddings.into_iter().map(|segment| (segment, pool.clone())).map(|(segment, pool)| async move {
         // TODO: consider using a raw byte array instead of JSON. Must clarify endianness.
-        let encoded_embedding: String = serde_json::to_string(&(segment.embedding.to_owned().iter().map(|emb| *emb as f32).collect::<Vec<f32>>())).expect("Should be able to serialize embedding");
+        let encoded_embedding: String = encode_embedding(&segment.embedding).expect("Should be able to serialize embedding");
         sqlx::query!(
             r#"INSERT INTO audio_file_segment (file_hash, starting_timestamp, embedding) VALUES (?, ?, ?)"#,
             audio_file.file_hash,
@@ -581,7 +582,7 @@ fn compute_mel_spec_from_pcm(segment_pcm: &[f32]) -> Result<Array3<f64>> {
 async fn compute_embedding_from_pcm(
     segment_pcm: &[f32],
     audio_embedder: &AudioEmbedder,
-) -> Result<Vec<f64>> {
+) -> Result<Vec<f32>> {
     let mel_spec = compute_mel_spec_from_pcm(segment_pcm)?;
     // Compute embedding
     let embedding = compute_embedding_from_mel_spec(mel_spec, audio_embedder).await?;
@@ -592,7 +593,7 @@ async fn compute_embedding_from_pcm(
 async fn compute_embedding_from_mel_spec(
     mel_spec: Array3<f64>,
     audio_embedder: &AudioEmbedder,
-) -> Result<Vec<f64>> {
+) -> Result<Vec<f32>> {
     println!(
         "Computing embedding for mel_spec of shape {:?}",
         mel_spec.shape()
@@ -602,12 +603,6 @@ async fn compute_embedding_from_mel_spec(
         .await?;
 
     Ok(embedding.to_vec())
-}
-
-pub fn get_search_results(search_string: &str, _pool: &SqlitePool) -> Result<Vec<String>> {
-    // Stubbed search algorithm: pick 10 random audio files
-
-    Ok(vec![format!("~/{}", search_string.to_owned()).to_string()])
 }
 
 #[cfg(test)]

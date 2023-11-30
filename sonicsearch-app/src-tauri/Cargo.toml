@@ -33,6 +33,9 @@ ndarray = "0.15.6"
 mel_spec_audio = "0.2.2"
 mel_spec_pipeline = "0.2.2"
 tokio = { version = "1.34.0", features = ["sync", "rt", "macros"] }
+tokenizers = "0.15.0"
+log = "0.4.20"
+simple_logger = "4.3.0"
 
 
 [features]
