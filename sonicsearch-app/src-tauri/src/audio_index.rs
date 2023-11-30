@@ -1,4 +1,4 @@
-use futures::join;
+use futures::FutureExt;
 use hound::{SampleFormat, WavReader};
 use mel_spec::config::MelConfig;
 use mel_spec_pipeline::{Pipeline, PipelineConfig};
@@ -12,6 +12,7 @@ use std::{
     io::{self, BufReader, Read},
     path::Path,
 };
+use tokio::join;
 
 use anyhow::{Context, Result};
 use futures::future::join_all;
@@ -51,7 +52,8 @@ fn is_audio_file(path: &Path) -> bool {
 
 #[tauri::command]
 pub async fn update_audio_index(app_state: State<'_, AppState>) -> result::Result<bool, String> {
-    println!("Updating audio file index...");
+    println!();
+    println!("--- Updating audio file index... ---");
     let mut is_indexing = app_state.is_indexing.write().await;
     if *is_indexing {
         // Should never happen, as is_indexing should be locked while index is occuring
@@ -81,9 +83,15 @@ pub async fn update_audio_index(app_state: State<'_, AppState>) -> result::Resul
             ))
         })
         .collect();
-    let embedder_future = audio_embedder.process_queue();
 
-    let (embedder_result, upsert_results) = join!(embedder_future, join_all(upsert_futures));
+    let upsert_futures = join_all(upsert_futures).then(|f| {
+        println!("All upserts completed. Stopping audio embedder.");
+        audio_embedder.stop_processing_queue();
+        async { f }
+    });
+
+    let embedder_future = audio_embedder.begin_processing_queue();
+    let (embedder_result, upsert_results) = join!(embedder_future, upsert_futures);
 
     embedder_result
         .context("Model should run successfully")
@@ -232,6 +240,7 @@ async fn index_new_file(
             .await.expect("Segment insertion should succeed");
     })).await;
     sql_transaction.commit().await?;
+    println!("Insertion completed for {}", audio_file.file_path);
 
     Ok(1)
 }
@@ -706,7 +715,12 @@ mod tests {
 
         tokio::spawn({
             let cloned_audio_embedder = test_audio_embedder.clone();
-            async move { cloned_audio_embedder.to_owned().process_queue().await }
+            async move {
+                cloned_audio_embedder
+                    .to_owned()
+                    .begin_processing_queue()
+                    .await
+            }
         });
         let segment_and_embed_futures: Vec<_> = test_audio_files
             .iter()

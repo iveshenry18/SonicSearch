@@ -13,7 +13,8 @@ pub struct MelSpecAndSender(Array3<f64>, Sender<Array1<f64>>);
 pub struct AudioEmbedder {
     pub(crate) session: Arc<Mutex<Session>>,
     pub(crate) input_queue: Arc<Mutex<Vec<MelSpecAndSender>>>,
-    pub(crate) queue_notify: Arc<Notify>,
+    pub(crate) queue_has_contents: Arc<Notify>,
+    pub(crate) stop_processing_queue: Arc<Notify>,
 }
 
 /// This is a wrapper around the ONNX runtime session that allows us to queue up
@@ -24,7 +25,8 @@ impl AudioEmbedder {
         Self {
             session: Arc::new(Mutex::new(session)),
             input_queue: Arc::new(Mutex::new(Vec::new())),
-            queue_notify: Arc::new(Notify::new()),
+            queue_has_contents: Arc::new(Notify::new()),
+            stop_processing_queue: Arc::new(Notify::new()),
         }
     }
 
@@ -39,7 +41,7 @@ impl AudioEmbedder {
             (*input_queue).push(MelSpecAndSender(input, sender));
         }
         // If process_queue is waiting for inputs, wake it up
-        self.queue_notify.notify_one();
+        self.queue_has_contents.notify_one();
 
         let result = receiver
             .await
@@ -51,7 +53,8 @@ impl AudioEmbedder {
 
     /// This is the function that actually processes the queue.
     /// It continually runs and waits for inputs to be added to the queue.
-    pub async fn process_queue(&self) -> Result<()> {
+    pub async fn begin_processing_queue(&self) -> Result<()> {
+        println!("Starting to process queue");
         loop {
             let mut inputs_to_process = Vec::new();
             let session = self.session.lock().await;
@@ -63,9 +66,20 @@ impl AudioEmbedder {
             if inputs_to_process.is_empty() {
                 // TODO: Each batch of size n produces n notifies but only consumes 1
                 // So this block runs an extra n-1 times after the queue is empty
-                println!("No inputs to process. Waiting for inputs to be added to the queue.");
-                self.queue_notify.notified().await;
-                continue;
+                print!("No inputs to process. ");
+                // block until either self.queue_has_contents.notified() or self.stop_processing_queue.cancelled()
+                // if queue_has_contents is notified, then we should continue processing
+                // if stop_processing_queue is cancelled, then we should break
+                tokio::select! {
+                    _ = self.queue_has_contents.notified() => {
+                        // Continue processing
+                        continue
+                    }
+                    _ = self.stop_processing_queue.notified() => {
+                        // Break
+                        break;
+                    }
+                }
             }
 
             println!("Embedding {} input(s)", inputs_to_process.len());
@@ -125,5 +139,11 @@ impl AudioEmbedder {
                 println!("Sent output");
             }
         }
+        println!("Exiting process queue");
+        Ok(())
+    }
+
+    pub fn stop_processing_queue(&self) {
+        self.stop_processing_queue.notify_one();
     }
 }

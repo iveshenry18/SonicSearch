@@ -7,11 +7,12 @@ mod state;
 
 use std::sync::Arc;
 
+use anyhow::Context;
 use futures::lock::Mutex;
 
 use audio_index::{get_search_results, update_audio_index};
 use sqlx::SqlitePool;
-use state::{audio_embedder::AudioEmbedder, AppState, database};
+use state::{audio_embedder::AudioEmbedder, database, AppState};
 use tauri::{async_runtime::RwLock, Manager};
 
 #[tauri::command]
@@ -30,7 +31,8 @@ fn main() {
                 clap::load_clap_models(&app.path_resolver()).expect("Failed to load clap model");
 
             let pool: SqlitePool =
-                tauri::async_runtime::block_on(database::initialize_database(&handle))?;
+                tauri::async_runtime::block_on(database::initialize_database(&handle))
+                    .context("Failed to initialize database")?;
 
             app.manage(AppState {
                 pool,
