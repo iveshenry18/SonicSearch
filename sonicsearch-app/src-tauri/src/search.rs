@@ -8,13 +8,10 @@ use sqlx::SqlitePool;
 use tauri::{AppHandle, PathResolver};
 use tokenizers::{tokenizer::Tokenizer, Encoding};
 
-use crate::{clap::encode_embedding, state::AppState};
-
-#[derive(sqlx::FromRow, serde::Serialize, serde::Deserialize)]
-pub struct PathAndTimestamp {
-    path: String,
-    starting_timestamp: f64,
-}
+use crate::state::{
+    database::vector_index::{self, PathAndTimestamp},
+    AppState,
+};
 
 #[tauri::command]
 pub async fn search_index(
@@ -43,7 +40,7 @@ async fn get_search_results(
     pool: &SqlitePool,
     text_embedder: &Session,
     app_handle: &AppHandle,
-) -> Result<Vec<PathAndTimestamp>> {
+) -> Result<Vec<vector_index::PathAndTimestamp>> {
     debug!("Preprocessing search string: {}", search_string);
     let preprocessed_search_string = preprocess_search_string(search_string);
     debug!("Tokenizing search string: {}", preprocessed_search_string);
@@ -55,18 +52,7 @@ async fn get_search_results(
         "Searching with embedding of size {}",
         embedded_search_string.len()
     );
-    search(&embedded_search_string, pool).await
-}
-
-async fn search(
-    search_string_embedding: &[f32],
-    pool: &SqlitePool,
-) -> Result<Vec<PathAndTimestamp>> {
-    const LIMIT: u32 = 10;
-    let encoded_search_string_embedding: String = encode_embedding(search_string_embedding)
-        .context("Failed to encode search string embedding")?;
-    debug!("Encoded search string embedding: {}", &encoded_search_string_embedding[0..50]);
-    todo!("Implement search with faiss");
+    vector_index::get_knn(&embedded_search_string, pool).await
 }
 
 async fn embed(
