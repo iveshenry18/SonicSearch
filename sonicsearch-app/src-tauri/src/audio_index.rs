@@ -22,7 +22,7 @@ use twox_hash::XxHash64;
 use walkdir::WalkDir;
 
 use crate::clap::encode_embedding;
-use crate::state::database::synchronize_audio_file_segment_vss;
+use crate::state::database::synchronize_index;
 use crate::state::{audio_embedder::AudioEmbedder, AppState};
 
 fn compute_hash(file: &File) -> io::Result<String> {
@@ -121,9 +121,9 @@ pub async fn update_audio_index(app_state: State<'_, AppState>) -> result::Resul
         upsert_results.1.len()
     );
 
-    synchronize_audio_file_segment_vss(&app_state.pool)
+    synchronize_index(&app_state.pool)
         .await
-        .map_err(|err| format!("Failed to synchronize audio file segment vss: {:?}", err))?;
+        .map_err(|err| format!("Failed to synchronize index: {:?}", err))?;
 
     println!("\nAudio file index updated.");
     *is_indexing = false;
