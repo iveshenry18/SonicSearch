@@ -66,22 +66,7 @@ async fn search(
     let encoded_search_string_embedding: String = encode_embedding(search_string_embedding)
         .context("Failed to encode search string embedding")?;
     debug!("Encoded search string embedding: {}", &encoded_search_string_embedding[0..50]);
-    let res: Vec<PathAndTimestamp> = sqlx::query_as::<_, PathAndTimestamp>(
-        r#"
-        SELECT af.file_path, afs.starting_timestamp
-        FROM audio_file af JOIN audio_file_segment afs ON af.file_hash = afs.file_hash
-        WHERE afs.rowid IN (
-            SELECT rowid
-            FROM vss_audio_file_segment
-            WHERE vss_search(embedding, ?)
-            LIMIT ?
-        )
-        "#,
-    )
-    .bind(encoded_search_string_embedding)
-    .bind(LIMIT)
-    .fetch_all(pool)
-    .await?;
+    todo!("Implement search with faiss");
 
     Ok(res)
 }
