@@ -6,10 +6,6 @@ use ort::{
 };
 use tauri::PathResolver;
 
-pub fn encode_embedding(embedding: &[f32]) -> Result<String> {
-    Ok(serde_json::to_string(&(embedding.to_owned()))?)
-}
-
 pub fn load_clap_models(path_resolver: &PathResolver) -> Result<(Session, Session)> {
     let environment = Environment::builder()
         .with_execution_providers(vec![

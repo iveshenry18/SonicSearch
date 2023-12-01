@@ -21,8 +21,7 @@ use tauri::State;
 use twox_hash::XxHash64;
 use walkdir::WalkDir;
 
-use crate::clap::encode_embedding;
-use crate::state::database::synchronize_index;
+use crate::state::database::{encode_embedding, vector_index};
 use crate::state::{audio_embedder::AudioEmbedder, AppState};
 
 fn compute_hash(file: &File) -> io::Result<String> {
@@ -121,7 +120,7 @@ pub async fn update_audio_index(app_state: State<'_, AppState>) -> result::Resul
         upsert_results.1.len()
     );
 
-    synchronize_index(&app_state.pool)
+    vector_index::synchronize_index(&app_state.pool)
         .await
         .map_err(|err| format!("Failed to synchronize index: {:?}", err))?;
 

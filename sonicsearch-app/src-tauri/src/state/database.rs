@@ -1,20 +1,10 @@
 use std::fs;
 
 use anyhow::{Context, Result};
-use rusqlite::ffi::sqlite3_auto_extension;
 use sqlx::SqlitePool;
 use tauri::AppHandle;
 
-/// Synchronize embeddings from the audio_file_segment table
-/// to the faiss index.
-pub async fn synchronize_index(pool: &SqlitePool) -> Result<()> {
-    let transaction = pool.begin().await?;
-    
-    todo!("Install and implement index with faiss");
-
-    transaction.commit().await?;
-    Ok(())
-}
+pub mod vector_index;
 
 const EMBEDDING_SIZE: u16 = 512;
 
@@ -38,11 +28,15 @@ pub async fn initialize_database(app_handle: &AppHandle) -> Result<SqlitePool> {
         .await
         .context("Error during migration")?;
 
-    synchronize_index(&pool)
+    vector_index::synchronize_index(&pool)
         .await
         .context("Failed to synchronize virtual table")?;
 
     println!("SonicSearch.db created and initialized.");
 
     Ok(pool)
+}
+
+pub fn encode_embedding(embedding: &[f32]) -> Result<String> {
+    Ok(serde_json::to_string(&(embedding.to_owned()))?)
 }
