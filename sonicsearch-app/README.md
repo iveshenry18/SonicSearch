@@ -9,11 +9,13 @@ A search engine for your sounds.
 
 
 ### Building
-This app isn't exactly... portable yet. For now you need at least a few binaries. At present, the `package.json` includes env variables that assume you're running MacOS and have these installed in the same place I do... :)
+This app isn't exactly... portable yet. For now you need at least a few binaries. Here's how to install those on my system (MacOS with Apple Silicon).
 
 1. onnxruntime: `brew install onnxruntime`
 1. libomp: `brew install libomp`
 1. llvm: `brew install llvm`
+
+These installations correspond to the values in `env_vars.example.sh`. After installing these, copy that file to `env_vars.local.sh`. Either run that file manually, or it will attempt to run before calling tauri commands. Not a great system.
 
 Faiss requires these env vars on Mac M1 per [this issue](https://github.com/facebookresearch/faiss/issues/2111)
 

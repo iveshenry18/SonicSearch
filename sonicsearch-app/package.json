@@ -3,13 +3,14 @@
   "version": "0.0.0",
   "description": "",
   "scripts": {
+    "configure-env": "source ../env_vars.local.sh || echo \"WARNING: Could not configure env. If needed, create env_vars.local.sh in the repository's root directory and rerun this command from the sonicsearch-app directory.\"",
     "start": "vite",
     "dev": "vite",
     "build": "vite build",
     "serve": "vite preview",
-    "tauri": "LDFLAGS='-L/opt/homebrew/opt/llvm/lib' CPPFLAGS='-I/opt/homebrew/opt/llvm/include' CXX=/opt/homebrew/opt/llvm/bin/clang++ CC=/opt/homebrew/opt/llvm/bin/clang ORT_DYLIB_PATH='/opt/homebrew/Cellar/onnxruntime/1.16.1/lib/libonnxruntime.dylib' RUSTFLAGS='-L/opt/homebrew/opt/libomp/lib -L/opt/homebrew/opt/llvm/lib -lblas -llapack' tauri",
+    "pretauri": "bun run configure-env",
+    "tauri": "tauri",
     "flamegraph:release": "flamegraph -o ./src-tauri/target/flamegraph.svg --root -- ./src-tauri/target/release/SonicSearch"
-
   },
   "license": "MIT",
   "dependencies": {

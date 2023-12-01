@@ -67,8 +67,6 @@ async fn search(
         .context("Failed to encode search string embedding")?;
     debug!("Encoded search string embedding: {}", &encoded_search_string_embedding[0..50]);
     todo!("Implement search with faiss");
-
-    Ok(res)
 }
 
 async fn embed(
