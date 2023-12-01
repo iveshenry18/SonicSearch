@@ -3,6 +3,10 @@
 
 [env]
 ORT_DYLIB_PATH='/opt/homebrew/Cellar/onnxruntime/1.16.1/lib/libonnxruntime.dylib'
+LDFLAGS='-L/opt/homebrew/opt/llvm/lib'
+CPPFLAGS='-I/opt/homebrew/opt/llvm/include'
+CXX='/opt/homebrew/opt/llvm/bin/clang++'
+CC='/opt/homebrew/opt/llvm/bin/clang'
 
 [build]
 rustflags = ['-L/opt/homebrew/opt/libomp/lib', '-L/opt/homebrew/opt/llvm/lib', '-lblas', '-llapack']
