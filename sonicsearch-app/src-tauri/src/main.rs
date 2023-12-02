@@ -34,10 +34,10 @@ fn main() {
             let (clap_model_text_embedder, clap_model_audio_embedder) =
                 clap::load_clap_models(&app.path_resolver()).expect("Failed to load clap model");
 
-            let index = initialize_index().context("Failed to initialize index")?;
+            let mut vector_index = initialize_index().context("Failed to initialize index")?;
 
             let pool: SqlitePool =
-                tauri::async_runtime::block_on(database::initialize_database(&handle))
+                tauri::async_runtime::block_on(database::initialize_database(&handle, &mut vector_index))
                     .context("Failed to initialize database")?;
 
             app.manage(AppState {
@@ -45,7 +45,7 @@ fn main() {
                 clap_model_audio_embedder: AudioEmbedder::new(clap_model_audio_embedder),
                 clap_model_text_embedder: Arc::new(Mutex::new(clap_model_text_embedder)),
                 is_indexing: RwLock::new(false),
-                index: RwLock::new(index),
+                vector_index: RwLock::new(vector_index),
             });
 
             Ok(())

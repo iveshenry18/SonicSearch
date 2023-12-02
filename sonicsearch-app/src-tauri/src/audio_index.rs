@@ -120,7 +120,8 @@ pub async fn update_audio_index(app_state: State<'_, AppState>) -> result::Resul
         upsert_results.1.len()
     );
 
-    vector_index::synchronize_index(&app_state.pool)
+    let locked_index = &mut *app_state.vector_index.write().await;
+    vector_index::synchronize_index(&app_state.pool, locked_index)
         .await
         .map_err(|err| format!("Failed to synchronize index: {:?}", err))?;
 
@@ -228,13 +229,14 @@ async fn index_new_file(
     .execute(&pool)
     .await?;
     join_all(segments_with_embeddings.into_iter().map(|segment| (segment, pool.clone())).map(|(segment, pool)| async move {
-        // TODO: consider using a raw byte array instead of JSON. Must clarify endianness.
-        let encoded_embedding: String = encode_embedding(&segment.embedding).expect("Should be able to serialize embedding");
+        let encoded_embedding: Vec<u8> = encode_embedding(&segment.embedding);
+        // Might not be necessary
+        let encoded_embedding_slice = encoded_embedding.as_slice();
         sqlx::query!(
             r#"INSERT INTO audio_file_segment (file_hash, starting_timestamp, embedding) VALUES (?, ?, ?)"#,
             audio_file.file_hash,
             segment.starting_timestamp,
-            encoded_embedding
+            encoded_embedding_slice
         )
             .execute(&pool)
             .await.expect("Segment insertion should succeed");
