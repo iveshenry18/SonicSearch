@@ -16,5 +16,5 @@ pub struct AppState {
     pub clap_model_text_embedder: Arc<Mutex<Session>>,
     pub clap_model_audio_embedder: AudioEmbedder,
     pub is_indexing: RwLock<bool>,
-    pub index: RwLock<IdMap<FlatIndex>>,
+    pub vector_index: RwLock<IdMap<FlatIndex>>,
 }

@@ -1,12 +1,16 @@
 use std::fs;
 
 use anyhow::{Context, Result};
+use faiss::{FlatIndex, IdMap};
 use sqlx::SqlitePool;
 use tauri::AppHandle;
 
 pub mod vector_index;
 
-pub async fn initialize_database(app_handle: &AppHandle) -> Result<SqlitePool> {
+pub async fn initialize_database(
+    app_handle: &AppHandle,
+    vector_index: &mut IdMap<FlatIndex>,
+) -> Result<SqlitePool> {
     println!("Setting up database...");
 
     let app_dir = app_handle
@@ -26,7 +30,7 @@ pub async fn initialize_database(app_handle: &AppHandle) -> Result<SqlitePool> {
         .await
         .context("Error during migration")?;
 
-    vector_index::synchronize_index(&pool)
+    vector_index::synchronize_index(&pool, vector_index)
         .await
         .context("Failed to synchronize virtual table")?;
 
@@ -35,6 +39,26 @@ pub async fn initialize_database(app_handle: &AppHandle) -> Result<SqlitePool> {
     Ok(pool)
 }
 
-pub fn encode_embedding(embedding: &[f32]) -> Result<String> {
-    Ok(serde_json::to_string(&(embedding.to_owned()))?)
+pub fn encode_embedding(embedding: &[f32]) -> Vec<u8> {
+    embedding
+        .iter()
+        .flat_map(|coord| f32::to_ne_bytes(*coord))
+        .collect::<Vec<u8>>()
+}
+
+pub fn decode_embedding(db_embedding: &[u8]) -> Result<Vec<f32>> {
+    if db_embedding.len() % 4 != 0 {
+        return Err(anyhow::anyhow!(
+            "Could not decode: Embedding length {} is not a multiple of 4",
+            db_embedding.len()
+        ));
+    }
+    db_embedding
+        .chunks_exact(4)
+        .map(|chunk| {
+            let mut bytes = [0; 4];
+            bytes.copy_from_slice(chunk);
+            Ok(f32::from_ne_bytes(bytes))
+        })
+        .collect::<Result<Vec<f32>>>()
 }

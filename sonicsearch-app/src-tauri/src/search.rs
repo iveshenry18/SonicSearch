@@ -1,6 +1,7 @@
 use std::result;
 
 use anyhow::{anyhow, Context, Result};
+use faiss::{FlatIndex, IdMap};
 use log::{debug, info, warn};
 use ndarray::{arr1, Axis, CowArray};
 use ort::Session;
@@ -21,10 +22,12 @@ pub async fn search_index(
 ) -> result::Result<Vec<PathAndTimestamp>, String> {
     info!("Searching for: {}", search_string);
     let text_embedder = app_state.clap_model_text_embedder.lock().await;
+    let mut locked_vector_index = app_state.vector_index.write().await;
     debug!("Got text embedder lock");
     get_search_results(
         search_string,
         &app_state.pool.clone(),
+        &mut locked_vector_index,
         &text_embedder,
         &app_handle,
     )
@@ -38,6 +41,7 @@ pub async fn search_index(
 async fn get_search_results(
     search_string: &str,
     pool: &SqlitePool,
+    vector_index: &mut IdMap<FlatIndex>,
     text_embedder: &Session,
     app_handle: &AppHandle,
 ) -> Result<Vec<vector_index::PathAndTimestamp>> {
@@ -52,7 +56,7 @@ async fn get_search_results(
         "Searching with embedding of size {}",
         embedded_search_string.len()
     );
-    vector_index::get_knn(&embedded_search_string, pool).await
+    vector_index::get_knn(&embedded_search_string, pool, vector_index).await
 }
 
 async fn embed(
