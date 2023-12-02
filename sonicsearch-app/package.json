@@ -3,7 +3,7 @@
   "version": "0.0.0",
   "description": "",
   "scripts": {
-    "configure-env": "source ../env_vars.local.sh || echo \"WARNING: Could not configure env. If needed, create env_vars.local.sh in the repository's root directory and rerun this command from the sonicsearch-app directory.\"",
+    "configure-env": "source ./env_vars.local.sh || source ../env_vars.local.sh || echo \"WARNING: Could not configure env. If needed, create env_vars.local.sh in the sonicsearch-app/ directory and rerun this command from the sonicsearch-app directory.\"",
     "start": "vite",
     "dev": "vite",
     "build": "vite build",

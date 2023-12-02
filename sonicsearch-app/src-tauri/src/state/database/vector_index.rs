@@ -1,14 +1,15 @@
 use anyhow::{Context, Result};
 
-use faiss::Index;
+use faiss::{FlatIndex, IdMap};
 use log::debug;
 use sqlx::SqlitePool;
 
-use crate::state::database::encode_embedding;
+use crate::{state::database::encode_embedding, clap::EMBEDDING_SIZE};
 
-pub fn initialize_index() -> Result<Index> {
+pub fn initialize_index() -> Result<IdMap<FlatIndex>> {
     debug!("Initializing index");
-    todo!("Install and implement index with faiss");
+    let factory_index = FlatIndex::new_l2(EMBEDDING_SIZE.into()).context("Failed to create FlatIndex")?;
+    IdMap::new(factory_index).context("Failed to convert the IndexImpl to an Index")
 }
 
 /// Synchronize embeddings from the audio_file_segment table
@@ -32,7 +33,7 @@ pub async fn get_knn(
     search_string_embedding: &[f32],
     _pool: &SqlitePool,
 ) -> Result<Vec<PathAndTimestamp>> {
-    const LIMIT: u32 = 10;
+    const _LIMIT: u32 = 10;
     let encoded_search_string_embedding: String = encode_embedding(search_string_embedding)
         .context("Failed to encode search string embedding")?;
     debug!(

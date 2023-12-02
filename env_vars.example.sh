@@ -1,7 +1,4 @@
 #! /bin/bash
-# This sets the necessary environment variables for building the application. It might only apply to my system.
-
-echo "Setting environment variables"
 
 export ORT_DYLIB_PATH='/opt/homebrew/Cellar/onnxruntime/1.16.1/lib/libonnxruntime.dylib'
 export LDFLAGS='-L/opt/homebrew/opt/llvm/lib'

@@ -15,13 +15,16 @@ use audio_index::update_audio_index;
 use search::search_index;
 use simple_logger::SimpleLogger;
 use sqlx::SqlitePool;
-use state::{audio_embedder::AudioEmbedder, database, AppState};
+use state::{
+    audio_embedder::AudioEmbedder,
+    database::{self, vector_index::initialize_index},
+    AppState,
+};
 use tauri::{async_runtime::RwLock, Manager};
 
 fn main() {
     log::set_max_level(log::LevelFilter::Info);
     SimpleLogger::new().init().unwrap();
-
 
     tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![search_index, update_audio_index])
@@ -30,6 +33,8 @@ fn main() {
 
             let (clap_model_text_embedder, clap_model_audio_embedder) =
                 clap::load_clap_models(&app.path_resolver()).expect("Failed to load clap model");
+
+            let index = initialize_index().context("Failed to initialize index")?;
 
             let pool: SqlitePool =
                 tauri::async_runtime::block_on(database::initialize_database(&handle))
@@ -40,6 +45,7 @@ fn main() {
                 clap_model_audio_embedder: AudioEmbedder::new(clap_model_audio_embedder),
                 clap_model_text_embedder: Arc::new(Mutex::new(clap_model_text_embedder)),
                 is_indexing: RwLock::new(false),
+                index: RwLock::new(index),
             });
 
             Ok(())
