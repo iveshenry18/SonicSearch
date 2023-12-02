@@ -2,7 +2,7 @@ pub mod audio_embedder;
 pub mod database;
 use std::sync::Arc;
 
-use faiss::Index;
+use faiss::{FlatIndex, IdMap};
 use futures::lock::Mutex;
 
 use ort::Session;
@@ -16,5 +16,5 @@ pub struct AppState {
     pub clap_model_text_embedder: Arc<Mutex<Session>>,
     pub clap_model_audio_embedder: AudioEmbedder,
     pub is_indexing: RwLock<bool>,
-    pub index: RwLock<Index>,
+    pub index: RwLock<IdMap<FlatIndex>>,
 }

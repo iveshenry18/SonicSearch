@@ -6,6 +6,8 @@ use ort::{
 };
 use tauri::PathResolver;
 
+pub const EMBEDDING_SIZE: u16 = 512;
+
 pub fn load_clap_models(path_resolver: &PathResolver) -> Result<(Session, Session)> {
     let environment = Environment::builder()
         .with_execution_providers(vec![

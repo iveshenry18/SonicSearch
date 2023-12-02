@@ -6,8 +6,6 @@ use tauri::AppHandle;
 
 pub mod vector_index;
 
-const EMBEDDING_SIZE: u16 = 512;
-
 pub async fn initialize_database(app_handle: &AppHandle) -> Result<SqlitePool> {
     println!("Setting up database...");
 
