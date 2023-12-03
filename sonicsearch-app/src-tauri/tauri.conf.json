@@ -36,6 +36,13 @@
         "scope": [
           "$RESOURCE/*"
         ]
+      },
+      "protocol": {
+        "all": false,
+        "asset": true,
+        "assetScope": [
+          "**"
+        ]
       }
     },
     "bundle": {
@@ -54,7 +61,7 @@
       ]
     },
     "security": {
-      "csp": null
+      "csp": "default-src: 'self' asset: https://asset.localhost; media-src 'self' asset: https://asset.localhost"
     },
     "windows": [
       {

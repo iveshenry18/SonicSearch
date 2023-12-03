@@ -1,5 +1,6 @@
 import { createEffect, createSignal } from "solid-js";
-import { invoke } from "@tauri-apps/api/tauri";
+import { convertFileSrc, invoke } from "@tauri-apps/api/tauri";
+import { AiFillFolderOpen } from "solid-icons/ai";
 import { Command } from "@tauri-apps/api/shell";
 import { basename } from "@tauri-apps/api/path";
 import "./App.css";
@@ -137,27 +138,43 @@ function App() {
           <ul class="search-results">
             {searchResults().map((searchResult) => (
               <li class="search-result">
-                <a
-                  class="search-result"
-                  onClick={(e) => {
-                    e.preventDefault();
-                    new Command("openInFinder", [
-                      "-R",
-                      searchResult.fullPath,
-                    ]).execute();
-                  }}
-                >
-                  <p class="search-result">
-                    <span class="search-result-basename">
-                      {searchResult.basename}
-                    </span>
-                    <span class="search-result-starting-timestamp">
-                      {" (" +
-                        secondsToString(searchResult.startingTimestamp) +
-                        ")"}
-                    </span>
-                  </p>
-                </a>
+                <div class="search-result">
+                  <div class="search-result-left">
+                    <div>
+                      <p class="search-result">
+                        <span class="search-result-basename">
+                          {searchResult.basename}
+                        </span>
+                        <span class="search-result-starting-timestamp">
+                          {" (" +
+                            secondsToString(searchResult.startingTimestamp) +
+                            ")"}
+                        </span>
+                      </p>
+                    </div>
+                    <div>
+                      <audio
+                        controls
+                        src={convertFileSrc(searchResult.fullPath)}
+                        preload="metadata"
+                      />
+                    </div>
+                  </div>
+                  <div class="search-result-right">
+                    <a
+                      class="search-result-folder"
+                      onClick={(e) => {
+                        e.preventDefault();
+                        new Command("openInFinder", [
+                          "-R",
+                          searchResult.fullPath,
+                        ]).execute();
+                      }}
+                    >
+                      <AiFillFolderOpen />
+                    </a>
+                  </div>
+                </div>
               </li>
             ))}
           </ul>
