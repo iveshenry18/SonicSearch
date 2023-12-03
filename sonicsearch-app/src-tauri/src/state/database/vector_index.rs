@@ -19,7 +19,12 @@ const EF_ARG: usize = 20;
 #[allow(clippy::assertions_on_constants)]
 const _: () = debug_assert!(EF_ARG > K_LIMIT && EF_ARG < MAX_NB_CONNECTION);
 
-pub type VectorIndex = Hnsw<'static, f32, DistCosine>;
+pub struct VectorIndex {
+    /// The hnsw index
+    index: Hnsw<'static, f32, DistCosine>,
+    /// The ids of the values currently in the index
+    indexed_ids: Vec<usize>,
+}
 
 pub fn initialize_index(nb_elem: Option<usize>) -> VectorIndex {
     debug!("Initializing index");
@@ -31,7 +36,10 @@ pub fn initialize_index(nb_elem: Option<usize>) -> VectorIndex {
         Hnsw::<f32, DistCosine>::new(MAX_NB_CONNECTION, nb_elem, nb_layer, EF_C, DistCosine {});
     debug!("Index initialized");
 
-    hnsw
+    VectorIndex {
+        index: hnsw,
+        indexed_ids: Vec::new(),
+    }
 }
 
 struct IndexRow {
@@ -40,8 +48,9 @@ struct IndexRow {
 }
 
 /// Synchronize embeddings from the audio_file_segment table
-/// to the vector index
-pub async fn synchronize_index(pool: &SqlitePool, index: &VectorIndex) -> Result<()> {
+/// to the vector index.
+/// This function only indexes embeddings that have not been indexed yet.
+pub async fn synchronize_index(pool: &SqlitePool, vector_index: &mut VectorIndex) -> Result<()> {
     debug!("Synchronizing index");
     let id_embeddings: Vec<IndexRow> = sqlx::query_as!(
         IndexRow,
@@ -61,7 +70,7 @@ pub async fn synchronize_index(pool: &SqlitePool, index: &VectorIndex) -> Result
         id_embeddings.len()
     );
 
-    let id_embeddings: Vec<(Vec<f32>, usize)> = id_embeddings
+    let new_id_embeddings: Vec<(Vec<f32>, usize)> = id_embeddings
         .iter()
         .map(|row| {
             let embedding: Vec<f32> =
@@ -69,16 +78,27 @@ pub async fn synchronize_index(pool: &SqlitePool, index: &VectorIndex) -> Result
             let rowid = row.rowid.expect("rowid should exist") as usize;
             anyhow::Ok((embedding, rowid))
         })
+        .filter(|res| {
+            res.as_ref()
+                .is_ok_and(|(_, rowid)| !vector_index.indexed_ids.contains(rowid))
+        })
         .collect::<Result<Vec<_>>>()
         .context("Error while parsing embeddings from db")?;
 
-    let id_embeddings: Vec<(&Vec<f32>, usize)> = id_embeddings
+    let new_id_embeddings: Vec<(&Vec<f32>, usize)> = new_id_embeddings
         .iter()
         .map(|(embedding, rowid)| (embedding, *rowid))
         .collect::<Vec<_>>();
 
     debug!("Adding embeddings to index");
-    index.parallel_insert(&id_embeddings);
+    vector_index.index.parallel_insert(&new_id_embeddings);
+
+    debug!("Marking embeddings as indexed");
+    let newly_indexed_ids = new_id_embeddings
+        .iter()
+        .map(|(_, rowid)| rowid)
+        .collect::<Vec<_>>();
+    vector_index.indexed_ids.extend(newly_indexed_ids);
 
     debug!("Index synchronized");
 
@@ -102,7 +122,9 @@ pub async fn get_knn(
     );
 
     debug!("Searching vector index...");
-    let search_result = vector_index.search(search_string_embedding, K_LIMIT, EF_ARG);
+    let search_result = vector_index
+        .index
+        .search(search_string_embedding, K_LIMIT, EF_ARG);
 
     let rowids = search_result
         .iter()

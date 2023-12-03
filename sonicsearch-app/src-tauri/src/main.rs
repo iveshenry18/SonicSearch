@@ -34,11 +34,13 @@ fn main() {
             let (clap_model_text_embedder, clap_model_audio_embedder) =
                 clap::load_clap_models(&app.path_resolver()).expect("Failed to load clap model");
 
-            let vector_index = initialize_index(None);
+            let mut vector_index = initialize_index(None);
 
-            let pool: SqlitePool =
-                tauri::async_runtime::block_on(database::initialize_database(&handle, &vector_index))
-                    .context("Failed to initialize database")?;
+            let pool: SqlitePool = tauri::async_runtime::block_on(database::initialize_database(
+                &handle,
+                &mut vector_index,
+            ))
+            .context("Failed to initialize database")?;
 
             app.manage(AppState {
                 pool,
