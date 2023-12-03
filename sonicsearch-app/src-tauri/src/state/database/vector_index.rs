@@ -9,9 +9,9 @@ use crate::{clap::EMBEDDING_SIZE, state::database::decode_embedding};
 
 pub fn initialize_index() -> Result<IdMap<FlatIndex>> {
     debug!("Initializing index");
-    let factory_index =
+    let flat_index =
         FlatIndex::new_l2(EMBEDDING_SIZE.into()).context("Failed to create FlatIndex")?;
-    IdMap::new(factory_index).context("Failed to convert the IndexImpl to an Index")
+    IdMap::new(flat_index).context("Failed to add IdMap to FlatIndex")
 }
 
 struct IndexRow {
@@ -96,7 +96,7 @@ pub async fn get_knn(
     debug!("Searching vector index...");
     // TODO: This hard crashes with no message.
     let search_result = vector_index
-        .search(search_string_embedding, K_LIMIT)
+        .assign(search_string_embedding, K_LIMIT)
         .map_err(|e| anyhow!("Failed to get knn: ".to_owned() + &e.to_string()))?;
     debug!("Got search results.");
 
