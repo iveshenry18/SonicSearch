@@ -2,7 +2,6 @@ pub mod audio_embedder;
 pub mod database;
 use std::sync::Arc;
 
-use faiss::{FlatIndex, IdMap};
 use futures::lock::Mutex;
 
 use ort::Session;
@@ -11,10 +10,12 @@ use tauri::async_runtime::RwLock;
 
 use audio_embedder::AudioEmbedder;
 
+use self::database::vector_index::VectorIndex;
+
 pub struct AppState {
     pub pool: SqlitePool,
     pub clap_model_text_embedder: Arc<Mutex<Session>>,
     pub clap_model_audio_embedder: AudioEmbedder,
     pub is_indexing: RwLock<bool>,
-    pub vector_index: RwLock<IdMap<FlatIndex>>,
+    pub vector_index: RwLock<VectorIndex>,
 }
