@@ -1,17 +1,37 @@
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result};
 
-use faiss::{FlatIndex, IdMap, Idx, Index};
 use futures::future::join_all;
+use hnsw_rs::{dist::DistCosine, hnsw::Hnsw};
 use log::debug;
 use sqlx::SqlitePool;
 
-use crate::{clap::EMBEDDING_SIZE, state::database::decode_embedding};
+use crate::state::database::decode_embedding;
 
-pub fn initialize_index() -> Result<IdMap<FlatIndex>> {
+const DEFAULT_NB_ELEM: usize = 5_000;
+const MAX_NB_CONNECTION: usize = 24;
+const EF_C: usize = 400;
+const K_LIMIT: usize = 10;
+const EF_ARG: usize = 20;
+
+// "The parameter ef controls the width of the search in the lowest level, it must be greater than number of neighbours asked.
+// A rule of thumb could be between knbn and max_nb_connection."
+// https://docs.rs/hnsw_rs/latest/hnsw_rs/hnsw/struct.Hnsw.html#method.parallel_insert
+#[allow(clippy::assertions_on_constants)]
+const _: () = debug_assert!(EF_ARG > K_LIMIT && EF_ARG < MAX_NB_CONNECTION);
+
+pub type VectorIndex = Hnsw<'static, f32, DistCosine>;
+
+pub fn initialize_index(nb_elem: Option<usize>) -> VectorIndex {
     debug!("Initializing index");
-    let flat_index =
-        FlatIndex::new_l2(EMBEDDING_SIZE.into()).context("Failed to create FlatIndex")?;
-    IdMap::new(flat_index).context("Failed to add IdMap to FlatIndex")
+
+    let nb_elem = nb_elem.unwrap_or(DEFAULT_NB_ELEM);
+    let nb_layer = 16.min((nb_elem as f32).ln().trunc() as usize);
+
+    let hnsw =
+        Hnsw::<f32, DistCosine>::new(MAX_NB_CONNECTION, nb_elem, nb_layer, EF_C, DistCosine {});
+    debug!("Index initialized");
+
+    hnsw
 }
 
 struct IndexRow {
@@ -20,8 +40,8 @@ struct IndexRow {
 }
 
 /// Synchronize embeddings from the audio_file_segment table
-/// to the faiss index.
-pub async fn synchronize_index(pool: &SqlitePool, index: &mut IdMap<FlatIndex>) -> Result<()> {
+/// to the vector index
+pub async fn synchronize_index(pool: &SqlitePool, index: &VectorIndex) -> Result<()> {
     debug!("Synchronizing index");
     let id_embeddings: Vec<IndexRow> = sqlx::query_as!(
         IndexRow,
@@ -41,38 +61,24 @@ pub async fn synchronize_index(pool: &SqlitePool, index: &mut IdMap<FlatIndex>) 
         id_embeddings.len()
     );
 
-    let id_embeddings: Vec<(i64, Vec<f32>)> = id_embeddings
+    let id_embeddings: Vec<(Vec<f32>, usize)> = id_embeddings
         .iter()
         .map(|row| {
             let embedding: Vec<f32> =
                 decode_embedding(&row.embedding).context("Could not decode embeddings")?;
-            let rowid = row.rowid.expect("rowid should exist");
-            anyhow::Ok((rowid, embedding))
+            let rowid = row.rowid.expect("rowid should exist") as usize;
+            anyhow::Ok((embedding, rowid))
         })
         .collect::<Result<Vec<_>>>()
         .context("Error while parsing embeddings from db")?;
 
-    let (ids, embeddings) = id_embeddings.into_iter().unzip::<_, _, Vec<_>, Vec<_>>();
-
-    let ids: Vec<Idx> = ids
+    let id_embeddings: Vec<(&Vec<f32>, usize)> = id_embeddings
         .iter()
-        .map(|id| {
-            let id: u64 = (*id).try_into().context("Failed to convert i64 to i32")?;
-            let id: Idx = Idx::new(id);
-            Ok(id)
-        })
-        .collect::<Result<Vec<_>>>()?;
+        .map(|(embedding, rowid)| (embedding, *rowid))
+        .collect::<Vec<_>>();
 
-    let flattened_embeddings: Vec<f32> = embeddings
-        .iter()
-        .flat_map(|embedding| embedding.to_owned())
-        .collect();
-
-    // This may be expensive but I'm not sure how add_with_ids behaves on conflict
-    index.reset().context("Failed to reset index")?;
-    index
-        .add_with_ids(flattened_embeddings.as_slice(), ids.as_slice())
-        .context("Failed to add embeddings to index")?;
+    debug!("Adding embeddings to index");
+    index.parallel_insert(&id_embeddings);
 
     debug!("Index synchronized");
 
@@ -88,23 +94,20 @@ pub struct PathAndTimestamp {
 pub async fn get_knn(
     search_string_embedding: &[f32],
     pool: &SqlitePool,
-    vector_index: &mut IdMap<FlatIndex>,
+    vector_index: &VectorIndex,
 ) -> Result<Vec<PathAndTimestamp>> {
-    debug!("Getting knn for embedding of size {}", search_string_embedding.len());
-    const K_LIMIT: usize = 10;
+    debug!(
+        "Getting knn for embedding of size {}",
+        search_string_embedding.len()
+    );
 
     debug!("Searching vector index...");
-    // TODO: This hard crashes with no message.
-    let search_result = vector_index
-        .assign(search_string_embedding, K_LIMIT)
-        .map_err(|e| anyhow!("Failed to get knn: ".to_owned() + &e.to_string()))?;
-    debug!("Got search results.");
+    let search_result = vector_index.search(search_string_embedding, K_LIMIT, EF_ARG);
 
     let rowids = search_result
-        .labels
         .iter()
-        .map(|label| label.get().context("Failed to get rowid from label"))
-        .collect::<Result<Vec<_>>>()?;
+        .map(|neighbour| neighbour.d_id)
+        .collect::<Vec<_>>();
 
     let path_and_timestamp_futures = rowids
         .iter()

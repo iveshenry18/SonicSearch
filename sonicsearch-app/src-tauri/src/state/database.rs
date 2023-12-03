@@ -1,15 +1,16 @@
 use std::fs;
 
 use anyhow::{Context, Result};
-use faiss::{FlatIndex, IdMap};
 use sqlx::SqlitePool;
 use tauri::AppHandle;
+
+use self::vector_index::VectorIndex;
 
 pub mod vector_index;
 
 pub async fn initialize_database(
     app_handle: &AppHandle,
-    vector_index: &mut IdMap<FlatIndex>,
+    vector_index: &VectorIndex,
 ) -> Result<SqlitePool> {
     println!("Setting up database...");
 

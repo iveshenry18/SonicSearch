@@ -35,7 +35,7 @@ tokio = { version = "1.34.0", features = ["sync", "rt", "macros"] }
 tokenizers = "0.15.0"
 log = "0.4.20"
 simple_logger = "4.3.0"
-faiss = { version = "0.12.1" }
+hnsw_rs = "0.2.0"
 
 
 [features]
