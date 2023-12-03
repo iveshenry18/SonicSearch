@@ -10,7 +10,7 @@ pub mod vector_index;
 
 pub async fn initialize_database(
     app_handle: &AppHandle,
-    vector_index: &VectorIndex,
+    vector_index: &mut VectorIndex,
 ) -> Result<SqlitePool> {
     println!("Setting up database...");
 
@@ -30,7 +30,7 @@ pub async fn initialize_database(
         .run(&pool)
         .await
         .context("Error during migration")?;
-
+    
     vector_index::synchronize_index(&pool, vector_index)
         .await
         .context("Failed to synchronize virtual table")?;
