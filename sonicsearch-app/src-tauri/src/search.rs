@@ -9,7 +9,7 @@ use tauri::{AppHandle, PathResolver};
 use tokenizers::{tokenizer::Tokenizer, Encoding};
 
 use crate::state::{
-    database::vector_index::{self, PathAndTimestamp, VectorIndex},
+    database::vector_index::{self, SearchResult, VectorIndex},
     AppState,
 };
 
@@ -18,7 +18,7 @@ pub async fn search_index(
     app_state: tauri::State<'_, AppState>,
     app_handle: AppHandle,
     search_string: &str,
-) -> result::Result<Vec<PathAndTimestamp>, String> {
+) -> result::Result<Vec<SearchResult>, String> {
     info!("Searching for: {}", search_string);
     let text_embedder = app_state.clap_model_text_embedder.lock().await;
     let locked_vector_index = app_state.vector_index.write().await;
@@ -43,7 +43,8 @@ async fn get_search_results(
     vector_index: &VectorIndex,
     text_embedder: &Session,
     app_handle: &AppHandle,
-) -> Result<Vec<vector_index::PathAndTimestamp>> {
+) -> Result<Vec<vector_index::SearchResult>> {
+    info!("Searching for: {}", search_string);
     debug!("Preprocessing search string: {}", search_string);
     let preprocessed_search_string = preprocess_search_string(search_string);
     debug!("Tokenizing search string: {}", preprocessed_search_string);

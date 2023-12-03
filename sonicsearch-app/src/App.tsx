@@ -11,21 +11,30 @@ type ProcessedSearchResult = {
   startingTimestamp: number;
 };
 
-const pathAndTimestamp = z
+const searchResult = z
   .object({
     file_path: z.string(),
     starting_timestamp: z.number(),
+    distance: z.number(),
   })
   .transform((obj) => {
     return {
       fullPath: obj.file_path,
       startingTimestamp: obj.starting_timestamp,
+      distance: obj.distance,
     };
   });
-const searchIndexResult = z.array(pathAndTimestamp);
+const SearchIndexResult = z.array(searchResult);
 
 function secondsToString(seconds: number) {
-  return new Date(seconds * 1000).toISOString().slice(11, 19);
+  const SECONDS_IN_HOUR = 3600;
+  const SECONDS_IN_10_MINUTES = 600;
+  const isoString = new Date(seconds * 1000).toISOString();
+  return seconds > SECONDS_IN_HOUR
+    ? isoString.slice(11, 19)
+    : seconds > SECONDS_IN_10_MINUTES
+    ? isoString.slice(14, 19)
+    : isoString.slice(15, 19);
 }
 
 function App() {
@@ -76,7 +85,7 @@ function App() {
     setIsSearching(false);
 
     console.log(res);
-    const parseRes = searchIndexResult.safeParse(res);
+    const parseRes = SearchIndexResult.safeParse(res);
     if (!parseRes.success) {
       console.error(parseRes.error);
       return;
