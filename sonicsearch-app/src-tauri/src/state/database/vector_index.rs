@@ -105,39 +105,48 @@ pub async fn synchronize_index(pool: &SqlitePool, vector_index: &mut VectorIndex
     Ok(())
 }
 
-#[derive(sqlx::FromRow, serde::Serialize, serde::Deserialize)]
-pub struct PathAndTimestamp {
+#[derive(serde::Serialize, serde::Deserialize)]
+pub struct SearchResult {
+    file_path: String,
+    starting_timestamp: f64,
+    distance: f32,
+}
+
+#[derive(sqlx::FromRow)]
+struct SearchRow {
     file_path: String,
     starting_timestamp: f64,
 }
 
+/// Returns K_LIMIT nearest neighbours of the given embedding
+/// in order of increasing distance.
 pub async fn get_knn(
     search_string_embedding: &[f32],
     pool: &SqlitePool,
     vector_index: &VectorIndex,
-) -> Result<Vec<PathAndTimestamp>> {
+) -> Result<Vec<SearchResult>> {
     debug!(
         "Getting knn for embedding of size {}",
         search_string_embedding.len()
     );
 
     debug!("Searching vector index...");
-    let search_result = vector_index
+    let mut neighbors = vector_index
         .index
         .search(search_string_embedding, K_LIMIT, EF_ARG);
+    neighbors.sort_by(|a, b| {
+        a.distance
+            .partial_cmp(&b.distance)
+            .expect("Distance should be comparable")
+    });
 
-    let rowids = search_result
+    let search_result_futures = neighbors
         .iter()
-        .map(|neighbour| neighbour.d_id)
-        .collect::<Vec<_>>();
-
-    let path_and_timestamp_futures = rowids
-        .iter()
-        .map(|rowid| (rowid, pool.clone()))
-        .map(|(rowid, pool)| async move {
-            let rowid = *rowid as i64;
-            sqlx::query_as!(
-                PathAndTimestamp,
+        .map(|neighbor| (neighbor, pool.clone()))
+        .map(|(neighbor, pool)| async move {
+            let rowid = neighbor.d_id as i64;
+            let search_rows = sqlx::query_as!(
+                SearchRow,
                 r#"
             SELECT
                 af.file_path,
@@ -153,15 +162,20 @@ pub async fn get_knn(
             .context(format!(
                 "Failed to fetch path and timestamp from database for rowid {}",
                 rowid
-            ))
+            ))?;
+            Ok(SearchResult {
+                file_path: search_rows.file_path,
+                starting_timestamp: search_rows.starting_timestamp,
+                distance: neighbor.distance,
+            })
         })
         .collect::<Vec<_>>();
 
-    let path_and_timestamps = join_all(path_and_timestamp_futures)
+    let search_results = join_all(search_result_futures)
         .await
         .into_iter()
         .collect::<Result<Vec<_>>>()
         .context("Failed to get path and timestamps")?;
 
-    Ok(path_and_timestamps)
+    Ok(search_results)
 }
