@@ -55,16 +55,6 @@
   justify-content: center;
 }
 
-a {
-  font-weight: 500;
-  color: #646cff;
-  text-decoration: inherit;
-}
-
-a:hover {
-  color: #535bf2;
-}
-
 h1 {
   text-align: center;
 }
@@ -87,6 +77,10 @@ button {
   box-shadow: 0 2px 2px rgba(0, 0, 0, 0.2);
 }
 
+input:focus {
+  box-shadow: 0 3px 3px rgba(0, 0, 0, 0.2);
+}
+
 button {
   cursor: pointer;
 }
@@ -106,13 +100,14 @@ button {
 
 button.refresh-button {
   position: absolute;
-  bottom: 1rem;
-  right: 1rem;
-  padding: 1rem;
+  bottom: 0.5rem;
+  right: 0.5rem;
+  padding: 0.5rem;
 }
 
 button.refresh-button p {
   margin: 0;
+  font-size: 0.8rem;
 }
 
 button.disabled {
@@ -124,14 +119,65 @@ button.disabled {
   margin-right: 5px;
 }
 
+form.row {
+  width: 100%;
+  justify-content: space-between;
+}
+
+div.search-zone {
+  overflow: scroll;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 1rem;
+}
+
+ul.search-results {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  max-width: 600px;
+  align-items: center;
+}
+
+li.search-result {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  width: 100%;
+  max-width: 600px;
+  border-radius: 8px;
+  background-color: #0f0f0f;
+}
+
+li.search-result:hover {
+  background-color: #000000;
+  box-shadow: 0 2px 2px rgba(0, 0, 0, 0.2);
+}
+
+a.search-result {
+  height: 100%;
+  width: fit-content;
+  padding: 0.5rem 1rem;
+  cursor: pointer;
+}
+
+p.search-result {
+  margin: 0;
+  padding: 0;
+  cursor: pointer;
+}
+
 @media (prefers-color-scheme: dark) {
   :root {
     color: #f6f6f6;
     background-color: #2f2f2f;
-  }
-
-  a:hover {
-    color: #24c8db;
   }
 
   input,
