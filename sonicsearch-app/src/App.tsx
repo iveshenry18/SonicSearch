@@ -14,13 +14,10 @@ export async function updateAudioIndex() {
 }
 
 function App() {
-  // Note: this state is synced imperatively right now.
-  // Eventually this should be synced in a more declarative way.
-  const [refreshCount, setRefreshCount] = createSignal(0);
   const [settingsModalOpen, setSettingsModalOpen] = createSignal(false);
 
   onMount(() => {
-    updateAudioIndex();
+    // updateAudioIndex();
   });
 
   return (
@@ -51,8 +48,6 @@ function App() {
                 onClose={() => {
                   setSettingsModalOpen(false);
                 }}
-                isIndexing={isIndexing}
-                triggerIndexing={() => setRefreshCount(refreshCount() + 1)}
               />
             </div>
           </div>

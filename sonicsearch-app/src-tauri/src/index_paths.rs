@@ -43,7 +43,7 @@ pub async fn add_paths_to_index(
 }
 
 async fn add_path_to_db(pool: &SqlitePool, path: PathBuf) -> Result<(), String> {
-    let path = path.to_str().unwrap();
+    let path = path.to_str().ok_or("Path is not valid UTF-8")?;
     sqlx::query!("INSERT INTO dir_paths (path) VALUES (?)", path)
         .execute(pool)
         .await
@@ -60,7 +60,10 @@ fn parse_path(path: &str) -> Result<PathBuf, String> {
         )
     })? {
         true => Ok(path),
-        false => Err(format!("Path does not exist: {}", path.to_str().unwrap())),
+        false => Err(format!(
+            "Path does not exist: {}",
+            path.to_str().ok_or("[unparseable path]")?
+        )),
     }
 }
 
@@ -87,9 +90,10 @@ async fn get_paths_from_db(pool: &SqlitePool) -> Result<Vec<PathBuf>, String> {
 pub async fn delete_path_from_index(
     app_state: State<'_, AppState>,
     path: String,
-) -> Result<(), String> {
+) -> Result<Vec<PathBuf>, String> {
     let parsed_path = parse_path(&path).map_err(|e| e.to_string())?;
-    delete_path_from_db(&app_state.pool, parsed_path).await
+    delete_path_from_db(&app_state.pool, parsed_path).await?;
+    get_paths_from_db(&app_state.pool).await
 }
 
 async fn delete_path_from_db(pool: &SqlitePool, path: PathBuf) -> Result<(), String> {

@@ -1,17 +1,15 @@
 import { invoke } from "@tauri-apps/api";
 import { listen, TauriEvent, UnlistenFn } from "@tauri-apps/api/event";
 import { onMount, onCleanup, createSignal } from "solid-js";
-import { AiOutlineClose } from "solid-icons/ai";
-import { isIndexing, setIsIndexing } from "../App";
+import { AiOutlineClose, AiOutlineDelete } from "solid-icons/ai";
+import { isIndexing, setIsIndexing, updateAudioIndex } from "../App";
 
-export function SettingsModal({
-  onClose,
-  triggerIndexing,
-}: {
-  onClose: () => void;
-  isIndexing: () => boolean;
-  triggerIndexing: () => void;
-}) {
+function getLastPortionOfPath(path: string) {
+  const splitPath = path.split("/");
+  return splitPath[splitPath.length - 1];
+}
+
+export function SettingsModal({ onClose }: { onClose: () => void }) {
   const [fileDropListen, setFileDropListen] = createSignal<UnlistenFn | null>(
     null
   );
@@ -28,7 +26,7 @@ export function SettingsModal({
     null
   );
 
-  async function getCurrentlyIndexedPaths() {
+  async function updateCurrentlyIndexedPaths() {
     try {
       const paths = await invoke("get_paths_from_index");
       console.debug(paths);
@@ -51,7 +49,19 @@ export function SettingsModal({
           path: pathOrPaths,
         });
       }
+      setCurrentlyIndexedPaths(currentPaths);
+    } catch (e) {
+      console.error(e);
+    } finally {
       setIsIndexing(false);
+    }
+  }
+
+  async function deletePathFromIndex(path: string) {
+    try {
+      const currentPaths = await invoke<string[]>("delete_path_from_index", {
+        path,
+      });
       setCurrentlyIndexedPaths(currentPaths);
     } catch (e) {
       console.error(e);
@@ -98,7 +108,7 @@ export function SettingsModal({
       setFileDropListen(() => fileDropUnlisten);
       setFileDropHoverCancelledListen(() => fileDropHoverCancelledUnlisten);
       setFileDropHoverListen(() => fileDropHoverUnlisten);
-      getCurrentlyIndexedPaths();
+      updateCurrentlyIndexedPaths();
     }
 
     registerListeners();
@@ -145,8 +155,23 @@ export function SettingsModal({
           />
           <p>Drop files or folders here to index them</p>
         </div>
+        <div class="indexed-paths">
+          <ul>
+            {currentlyIndexedPaths().map((path) => (
+              <li>
+                <div class="indexed-path" aria-describedby="path-tooltip">
+                  <div role="tooltip" id="path-tooltip">
+                    {path}
+                  </div>
+                  <p>{getLastPortionOfPath(path)}</p>
+                  <AiOutlineDelete onClick={() => deletePathFromIndex(path)} />
+                </div>
+              </li>
+            ))}
+          </ul>
+        </div>
         <button
-          onClick={triggerIndexing}
+          onClick={updateAudioIndex}
           disabled={isIndexing()}
           class={isIndexing() ? "disabled refresh-button" : "refresh-button"}
         >

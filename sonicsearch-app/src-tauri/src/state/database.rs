@@ -1,7 +1,10 @@
-use std::fs;
+use std::{fs, time::Duration};
 
 use anyhow::{Context, Result};
-use sqlx::SqlitePool;
+use sqlx::{
+    sqlite::{SqliteConnectOptions, SqlitePoolOptions},
+    SqlitePool,
+};
 use tauri::AppHandle;
 
 use self::vector_index::VectorIndex;
@@ -22,7 +25,17 @@ pub async fn initialize_database(
     fs::create_dir_all(&app_dir).expect("The app data directory should be created.");
 
     let sqlite_path = app_dir.join("SonicSearch.sqlite");
-    let pool = SqlitePool::connect(sqlite_path.to_str().expect("sqlite_path should exist"))
+    let pool = SqlitePoolOptions::new()
+        .max_connections(5)
+        .max_lifetime(Some(Duration::from_secs(10 * 60)))
+        // 15 minute acquire timeout :)
+        .acquire_timeout(Duration::from_secs(15 * 60))
+        .connect_with(
+            SqliteConnectOptions::new()
+                .filename(sqlite_path.to_str().context("Sqlite path should exist")?)
+                .create_if_missing(true)
+                .busy_timeout(Duration::from_secs(10 * 60)),
+        )
         .await
         .context("Failed to open database")?;
 
@@ -30,7 +43,7 @@ pub async fn initialize_database(
         .run(&pool)
         .await
         .context("Error during migration")?;
-    
+
     vector_index::synchronize_index(&pool, vector_index)
         .await
         .context("Failed to synchronize virtual table")?;

@@ -55,13 +55,19 @@ impl AudioEmbedder {
     /// It continually runs and waits for inputs to be added to the queue.
     pub async fn begin_processing_queue(&self) -> Result<()> {
         println!("Starting to process queue");
+        const MAX_BATCH_SIZE: usize = 512;
         loop {
             let mut inputs_to_process = Vec::new();
             let session = self.session.lock().await;
-            // Read from the queue and release the lock
+            // Read up to MAX_BATCH_SIZE items from the queue and release the lock
             {
                 let mut input_queue = self.input_queue.lock().await;
-                inputs_to_process.append(input_queue.as_mut());
+                let input_queue_len = input_queue.len();
+                inputs_to_process.append(
+                    &mut (*input_queue)
+                        .drain(0..MAX_BATCH_SIZE.min(input_queue_len))
+                        .collect::<Vec<_>>(),
+                );
             }
             if inputs_to_process.is_empty() {
                 print!("No inputs to process. ");
@@ -131,9 +137,7 @@ impl AudioEmbedder {
 
             for (output, sender) in outputs.into_iter().zip(senders.into_iter()) {
                 println!("Sending output of shape {:?} to sender", output.shape());
-                sender
-                    .send(output)
-                    .expect("Failed to send output");
+                sender.send(output).expect("Failed to send output");
                 println!("Sent output");
             }
         }

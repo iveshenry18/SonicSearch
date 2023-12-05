@@ -1,5 +1,6 @@
 use futures::FutureExt;
 use hound::{SampleFormat, WavReader};
+use log::debug;
 use mel_spec::config::MelConfig;
 use mel_spec_pipeline::{Pipeline, PipelineConfig};
 use ndarray::{concatenate, Array2, Array3, Axis};
@@ -21,6 +22,7 @@ use tauri::State;
 use twox_hash::XxHash64;
 use walkdir::WalkDir;
 
+use crate::index_paths::get_paths_from_index;
 use crate::state::database::{encode_embedding, vector_index};
 use crate::state::{audio_embedder::AudioEmbedder, AppState};
 
@@ -52,25 +54,25 @@ fn is_audio_file(path: &Path) -> bool {
 
 #[tauri::command]
 pub async fn update_audio_index(app_state: State<'_, AppState>) -> result::Result<bool, String> {
-    println!();
-    println!("--- Updating audio file index... ---");
+    debug!("\n--- Updating audio file index... ---");
     let mut is_indexing = app_state.is_indexing.write().await;
     if *is_indexing {
         // Should never happen, as is_indexing should be locked while index is occuring
-        println!("Indexing already in progress.");
+        debug!("Indexing already in progress.");
         return Err("Indexing already in progress.".into());
     } else {
         *is_indexing = true;
     }
-    // TODO: make this configurable
-    let user_audio_dir = dirs::home_dir()
-        .expect("Failed to get user home directory")
-        .join("sonicsearchtestaudio");
+    let user_audio_dirs = get_paths_from_index(app_state.clone())
+        .await
+        .map_err(|err| format!("Failed to get user-defined directories: {:?}", err))?;
+    debug!("Updating index for {} paths", user_audio_dirs.len());
     let audio_embedder = &app_state.clap_model_audio_embedder;
     let pool = app_state.pool.clone();
 
-    let upsert_futures: Vec<_> = WalkDir::new(user_audio_dir)
+    let upsert_futures: Vec<_> = user_audio_dirs
         .into_iter()
+        .flat_map(WalkDir::new)
         .filter(|dir| {
             dir.as_ref()
                 .is_ok_and(|ok_dir| ok_dir.path().is_file() && is_audio_file(ok_dir.path()))
@@ -85,7 +87,7 @@ pub async fn update_audio_index(app_state: State<'_, AppState>) -> result::Resul
         .collect();
 
     let upsert_futures = join_all(upsert_futures).then(|f| {
-        println!("All upserts completed. Stopping audio embedder.");
+        debug!("All upserts completed. Stopping audio embedder.");
         audio_embedder.stop_processing_queue();
         async { f }
     });
@@ -102,7 +104,7 @@ pub async fn update_audio_index(app_state: State<'_, AppState>) -> result::Resul
         .map(|res| match res {
             Ok(ok) => Ok(ok),
             Err(err) => {
-                println!("{}", err);
+                debug!("{}", err);
                 Err(err)
             }
         })
@@ -113,7 +115,7 @@ pub async fn update_audio_index(app_state: State<'_, AppState>) -> result::Resul
             }
             acc
         });
-    println!(
+    debug!(
         "Indexed {} files total. Success: {}, Failures: {}",
         upsert_results.0 + upsert_results.1.len(),
         upsert_results.0,
@@ -125,7 +127,7 @@ pub async fn update_audio_index(app_state: State<'_, AppState>) -> result::Resul
         .await
         .map_err(|err| format!("Failed to synchronize index: {:?}", err))?;
 
-    println!("\nAudio file index updated.");
+    debug!("\nAudio file index updated.");
     *is_indexing = false;
     Ok(true)
 }
@@ -145,38 +147,45 @@ pub async fn upsert_audio_file(
     audio_embedder: &AudioEmbedder,
     path: PathBuf,
 ) -> Result<()> {
-    println!("Upserting {} ", path.display());
+    debug!("Upserting {} ", path.display());
     let file = File::open(&path)?;
     let audio_file = LoadedAudioFile {
         file_hash: compute_hash(&file).context("Failed to compute hash")?,
         file_path: path.to_string_lossy().into_owned(),
     };
-
     // Save some memory :)
     drop(file);
+
     let existing_row = sqlx::query_as!(
         AudioFileRow,
         r#"SELECT file_path FROM audio_file WHERE file_hash = ?"#,
         audio_file.file_hash
     )
     .fetch_optional(&pool)
-    .await?;
+    .await
+    .context(format!(
+        "Failed while finding existing row for {}",
+        get_file_name(&audio_file.file_path)
+    ))?;
 
     if existing_row.is_none() {
-        println!("{} is new, indexing...", path.display());
+        debug!("{} is new, indexing...", path.display());
         index_new_file(pool, audio_embedder, &audio_file).await?;
     } else if existing_row
         .as_ref()
         .is_some_and(|row| row.file_path != audio_file.file_path)
     {
-        println!(
+        debug!(
             "{} has moved from {}, updating path...",
             path.display(),
-            existing_row.as_ref().unwrap().file_path
+            existing_row
+                .as_ref()
+                .context("Could not get existing row")?
+                .file_path
         );
         update_path(pool, &audio_file).await?;
     } else {
-        println!("{} already indexed.", path.display());
+        debug!("{} already indexed.", path.display());
     }
 
     Ok(())
@@ -215,20 +224,27 @@ async fn index_new_file(
     let segments_with_embeddings = segment_and_embed_file(audio_file, audio_embedder).await?;
 
     // Insert all segments and audio file into database
-    println!(
+    debug!(
         "Inserting {} segments of {} into database...",
         segments_with_embeddings.len(),
-        audio_file.file_path
+        get_file_name(&audio_file.file_path)
     );
-    let sql_transaction = pool.begin().await?;
+    let mut sql_transaction = pool.begin().await.context(format!(
+        "Failed while waiting for transaction to insert embeddings for {}",
+        get_file_name(&audio_file.file_path)
+    ))?;
     sqlx::query!(
         r#"INSERT INTO audio_file (file_hash, file_path) VALUES (?, ?)"#,
         audio_file.file_hash,
         audio_file.file_path
     )
-    .execute(&pool)
-    .await?;
-    join_all(segments_with_embeddings.into_iter().map(|segment| (segment, pool.clone())).map(|(segment, pool)| async move {
+    .execute(&mut *sql_transaction)
+    .await
+    .context(format!(
+        "Failed while inserting embedding for file {}",
+        get_file_name(&audio_file.file_path)
+    ))?;
+    for segment in segments_with_embeddings {
         let encoded_embedding: Vec<u8> = encode_embedding(&segment.embedding);
         // Might not be necessary
         let encoded_embedding_slice = encoded_embedding.as_slice();
@@ -238,11 +254,11 @@ async fn index_new_file(
             segment.starting_timestamp,
             encoded_embedding_slice
         )
-            .execute(&pool)
+            .execute(&mut *sql_transaction)
             .await.expect("Segment insertion should succeed");
-    })).await;
+    }
     sql_transaction.commit().await?;
-    println!("Insertion completed for {}", audio_file.file_path);
+    debug!("Insertion completed for {}", audio_file.file_path);
 
     Ok(1)
 }
@@ -252,24 +268,24 @@ async fn segment_and_embed_file(
     audio_embedder: &AudioEmbedder,
 ) -> Result<Vec<FileSegmentWithEmbedding>> {
     // Process audio file into embedded segments
-    println!("Preprocessing {}...", get_file_name(&audio_file.file_path));
+    debug!("Preprocessing {}...", get_file_name(&audio_file.file_path));
     let pcm_audio = preprocess_audio_file_to_pcm(audio_file)
         .await
         .context(format!(
             "Failed to preprocess audio file {}",
             audio_file.file_path
         ))?;
-    println!(
+    debug!(
         "Preprocessed {} into {} samples",
         get_file_name(&audio_file.file_path),
         pcm_audio.len()
     );
-    println!(
+    debug!(
         "Splitting {} into segments...",
         get_file_name(&audio_file.file_path)
     );
     let audio_segments = split_audio_into_segments(&pcm_audio);
-    println!(
+    debug!(
         "Split {} into {} segments with lengths {:?}",
         get_file_name(&audio_file.file_path),
         audio_segments.len(),
@@ -284,7 +300,7 @@ async fn segment_and_embed_file(
                 .into_iter()
                 .enumerate()
                 .map(|(i, segment)| async move {
-                    println!(
+                    debug!(
                         "Computing embedding for segment {} of {}...",
                         i,
                         get_file_name(&audio_file.file_path)
@@ -336,7 +352,7 @@ async fn preprocess_audio_file_to_pcm(audio_file: &LoadedAudioFile) -> Result<Ve
                 WavReader::open(&audio_file.file_path).context("Failed to read .wav file")?;
             let wav_spec = wav_reader.spec();
             let initial_seconds = wav_reader.duration() as f32 / wav_spec.sample_rate as f32;
-            println!(
+            debug!(
                 "Before preprocessing, {} has a sample rate of {} and a length of {} samples, for a duration of {} seconds",
                 get_file_name(&audio_file.file_path),
                 wav_spec.sample_rate,
@@ -346,16 +362,16 @@ async fn preprocess_audio_file_to_pcm(audio_file: &LoadedAudioFile) -> Result<Ve
             let mut wav_samples: Vec<f32> = match wav_spec.sample_format {
                 SampleFormat::Float => wav_reader
                     .into_samples::<f32>()
-                    .map(|sample| sample.expect("Failed to read .wav sample"))
-                    .collect(),
+                    .map(|sample| sample.context("Failed to read .wav sample"))
+                    .collect::<Result<Vec<_>>>()?,
                 SampleFormat::Int => wav_reader
                     .into_samples::<i32>()
                     .map(|sample| {
-                        let sample = sample.expect("Failed to read .wav sample");
+                        let sample = sample.context("Failed to read .wav sample")?;
                         // Normalize to f32
-                        (sample as f32 / i32::MAX as f32) * f32::MAX
+                        Ok(sample as f32 / i32::MAX as f32)
                     })
-                    .collect(),
+                    .collect::<Result<Vec<_>>>()?,
             };
 
             if wav_spec.channels != 1 {
@@ -369,7 +385,7 @@ async fn preprocess_audio_file_to_pcm(audio_file: &LoadedAudioFile) -> Result<Ve
                 wav_samples = resample(wav_samples.as_ref(), wav_spec.sample_rate)?;
             }
             let final_seconds = wav_samples.len() as f32 / TARGET_SAMPLE_RATE as f32;
-            println!(
+            debug!(
                 "Resampled {} to {} samples, for a duration of {} seconds",
                 get_file_name(&audio_file.file_path),
                 wav_samples.len(),
@@ -394,6 +410,12 @@ async fn preprocess_audio_file_to_pcm(audio_file: &LoadedAudioFile) -> Result<Ve
 }
 
 fn resample(samples: &[f32], source_sample_rate: u32) -> Result<Vec<f32>> {
+    debug!(
+        "Resampling {} samples from {} to {}",
+        samples.len(),
+        source_sample_rate,
+        TARGET_SAMPLE_RATE
+    );
     let initial_seconds = samples.len() as f32 / source_sample_rate as f32;
 
     const CHANNELS: usize = 1;
@@ -440,7 +462,7 @@ fn resample(samples: &[f32], source_sample_rate: u32) -> Result<Vec<f32>> {
         })
         .collect::<Result<Vec<_>>>()
         .context("Failed while resampling")?;
-    println!();
+    debug!("\n");
 
     let resampled_seconds = resampled_samples.len() as f32 / TARGET_SAMPLE_RATE as f32;
     if (resampled_seconds - initial_seconds).abs() > 0.1 {
@@ -476,7 +498,7 @@ fn split_audio_into_segments(pcm_audio: &[f32]) -> Vec<FileSegment> {
         }],
         _ => segments,
     };
-    println!("Split into {} segments", segments.len());
+    debug!("Split into {} segments", segments.len());
     segments
 }
 
@@ -498,8 +520,10 @@ const MEL_CONFIG: MelConfigSettings = MelConfigSettings {
 };
 
 const TARGET_LENGTH: usize = 1001;
+/// Repeat-pad mel spectrogram to have a length of TARGET_LENGTH (1001)
 fn reshape_mel_spec(mel_spec: Array2<f64>) -> Result<Array3<f64>> {
-    println!("Reshaping mel_spec of shape {:?}", mel_spec.shape());
+    debug!("Reshaping mel_spec of shape {:?}", mel_spec.shape());
+    // [n_mels, n_frames] -> [n_frames, n_mels]
     let transposed_mel_spec = mel_spec.t().to_owned();
     if transposed_mel_spec.len_of(Axis(0)) == TARGET_LENGTH {
         return Ok(transposed_mel_spec.insert_axis(Axis(0)));
@@ -510,25 +534,25 @@ fn reshape_mel_spec(mel_spec: Array2<f64>) -> Result<Array3<f64>> {
     let mut result: Array2<f64> = transposed_mel_spec.clone();
     while result.len_of(Axis(0)) < TARGET_LENGTH {
         let result_len = result.len_of(Axis(0));
-        let padding_left = TARGET_LENGTH - result_len;
-        let slice_bound = match padding_left > result_len {
-            true => result_len,
-            false => padding_left,
+        let transposed_mel_spec_len = transposed_mel_spec.len_of(Axis(0));
+        let frames_remaining = TARGET_LENGTH - result_len;
+        let slice_end = match frames_remaining > transposed_mel_spec_len {
+            true => transposed_mel_spec_len,
+            false => frames_remaining,
         };
 
         let view_to_add = transposed_mel_spec.slice_axis(
             Axis(0),
             ndarray::Slice {
                 start: (0),
-                end: (Some(
-                    slice_bound
-                        .try_into()
-                        .expect("slice_bound should always be positive"),
-                )),
+                end: (Some(slice_end.try_into().context(format!(
+                    "slice_end should always be positive, was {}",
+                    slice_end
+                ))?)),
                 step: (1),
             },
         );
-        println!(
+        debug!(
             "Adding view of shape {:?} to result of shape {:?}",
             view_to_add.shape(),
             result.shape()
@@ -540,7 +564,7 @@ fn reshape_mel_spec(mel_spec: Array2<f64>) -> Result<Array3<f64>> {
 }
 
 fn compute_mel_spec_from_pcm(segment_pcm: &[f32]) -> Result<Array3<f64>> {
-    println!(
+    debug!(
         "Computing mel spectrogram for pcm of length {}",
         segment_pcm.len()
     );
@@ -595,7 +619,7 @@ async fn compute_embedding_from_mel_spec(
     mel_spec: Array3<f64>,
     audio_embedder: &AudioEmbedder,
 ) -> Result<Vec<f32>> {
-    println!(
+    debug!(
         "Computing embedding for mel_spec of shape {:?}",
         mel_spec.shape()
     );
@@ -742,13 +766,13 @@ mod tests {
             .map(|res| res.as_ref().expect("Segment and embed should succeed"))
             .collect::<Vec<_>>();
         assert_eq!(segment_and_embed_result.len(), audio_filenames.len());
-        println!("Embedded {} files", segment_and_embed_result.len());
+        debug!("Embedded {} files", segment_and_embed_result.len());
         let segments_embedded = segment_and_embed_result
             .iter()
             .map(|segments| segments.len())
             .sum::<usize>();
         assert!(segments_embedded >= audio_filenames.len());
-        println!("Embedded a total of {} segments", segments_embedded);
-        println!("Done :)")
+        debug!("Embedded a total of {} segments", segments_embedded);
+        debug!("Done :)")
     }
 }

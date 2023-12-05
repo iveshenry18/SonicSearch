@@ -23,7 +23,7 @@ use state::{
 };
 use tauri::{async_runtime::RwLock, Manager};
 
-use crate::index_paths::{add_path_to_index, delete_path_from_index, get_paths_from_index};
+use crate::index_paths::{add_path_to_index, delete_path_from_index, get_paths_from_index, add_paths_to_index};
 
 fn main() {
     log::set_max_level(log::LevelFilter::Info);
@@ -34,6 +34,7 @@ fn main() {
             search_index,
             update_audio_index,
             add_path_to_index,
+            add_paths_to_index,
             get_paths_from_index,
             delete_path_from_index
         ])
