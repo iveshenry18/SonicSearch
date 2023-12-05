@@ -3,6 +3,7 @@
 
 mod audio_index;
 mod clap;
+pub mod index_paths;
 mod search;
 mod state;
 
@@ -22,12 +23,20 @@ use state::{
 };
 use tauri::{async_runtime::RwLock, Manager};
 
+use crate::index_paths::{add_path_to_index, delete_path_from_index, get_paths_from_index};
+
 fn main() {
     log::set_max_level(log::LevelFilter::Info);
     SimpleLogger::new().init().unwrap();
 
     tauri::Builder::default()
-        .invoke_handler(tauri::generate_handler![search_index, update_audio_index])
+        .invoke_handler(tauri::generate_handler![
+            search_index,
+            update_audio_index,
+            add_path_to_index,
+            get_paths_from_index,
+            delete_path_from_index
+        ])
         .setup(|app| {
             let handle = app.handle();
 

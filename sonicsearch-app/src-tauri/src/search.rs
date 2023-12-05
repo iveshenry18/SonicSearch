@@ -120,7 +120,7 @@ fn tokenize(
 
 /// If search string is short, add "The sound of {}" to the beginning of the string
 fn preprocess_search_string(search_string: &str) -> String {
-    const MIN_SEARCH_STRING_LENGTH: usize = 10;
+    const MIN_SEARCH_STRING_LENGTH: usize = 30;
     match search_string.len() {
         0..=MIN_SEARCH_STRING_LENGTH => format!("The sound of {}", search_string),
         _ => search_string.to_string(),
