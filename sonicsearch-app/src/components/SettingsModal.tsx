@@ -2,7 +2,13 @@ import { invoke } from "@tauri-apps/api";
 import { listen, TauriEvent, UnlistenFn } from "@tauri-apps/api/event";
 import { onMount, onCleanup, createSignal } from "solid-js";
 import { AiOutlineClose, AiOutlineDelete } from "solid-icons/ai";
-import { isIndexing, setIsIndexing, updateAudioIndex } from "../App";
+import {
+  currentlyIndexedPaths,
+  isIndexing,
+  setCurrentlyIndexedPaths,
+  updateAudioIndex,
+} from "../App";
+import { commands } from "../lib/specta-bindings";
 
 function getLastPortionOfPath(path: string) {
   const splitPath = path.split("/");
@@ -18,42 +24,21 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
   const [fileDropHoverCancelledListen, setFileDropHoverCancelledListen] =
     createSignal<UnlistenFn | null>(null);
   const [mouseInDropZone, setMouseInDropZone] = createSignal(false);
-  const [currentlyIndexedPaths, setCurrentlyIndexedPaths] = createSignal<
-    string[]
-  >([]);
 
   const [fileDropHovering, setFileDropHovering] = createSignal<null | string>(
     null
   );
 
-  async function updateCurrentlyIndexedPaths() {
+  async function addPathsToIndex(paths: string[]) {
     try {
-      const paths = await invoke("get_paths_from_index");
-      console.debug(paths);
-      setCurrentlyIndexedPaths(paths as string[]);
-    } catch (e) {
-      console.error(e);
-    }
-  }
-
-  async function addPathOrPathsToIndex(pathOrPaths: string | string[]) {
-    setIsIndexing(true);
-    let currentPaths;
-    try {
-      if (Array.isArray(pathOrPaths)) {
-        currentPaths = await invoke<string[]>("add_paths_to_index", {
-          paths: pathOrPaths,
-        });
+      const currentPathsRes = await commands.addPathsToIndex(paths);
+      if (currentPathsRes.status === "error") {
+        console.error(currentPathsRes.error);
       } else {
-        currentPaths = await invoke<string[]>("add_path_to_index", {
-          path: pathOrPaths,
-        });
+        setCurrentlyIndexedPaths(currentPathsRes.data);
       }
-      setCurrentlyIndexedPaths(currentPaths);
     } catch (e) {
       console.error(e);
-    } finally {
-      setIsIndexing(false);
     }
   }
 
@@ -69,18 +54,15 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
   }
 
   onMount(() => {
-    async function registerListeners() {
-      console.debug("Registering listeners");
+    async function registerFileDragListeners() {
+      console.debug("Registering file drag listeners");
       const fileDropUnlisten = await listen(
         TauriEvent.WINDOW_FILE_DROP,
         (event) => {
           console.log(event);
           if (mouseInDropZone()) {
-            if (
-              Array.isArray(event.payload) ||
-              typeof event.payload === "string"
-            ) {
-              addPathOrPathsToIndex(event.payload);
+            if (Array.isArray(event.payload)) {
+              addPathsToIndex(event.payload);
             } else {
               console.error("Unexpected payload type", event.payload);
             }
@@ -108,10 +90,9 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
       setFileDropListen(() => fileDropUnlisten);
       setFileDropHoverCancelledListen(() => fileDropHoverCancelledUnlisten);
       setFileDropHoverListen(() => fileDropHoverUnlisten);
-      updateCurrentlyIndexedPaths();
     }
 
-    registerListeners();
+    registerFileDragListeners();
   });
 
   onCleanup(() => {

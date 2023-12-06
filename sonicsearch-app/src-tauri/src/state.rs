@@ -10,12 +10,15 @@ use tauri::async_runtime::RwLock;
 
 use audio_embedder::AudioEmbedder;
 
+
+use crate::audio_index::indexing_status::IndexingStatus;
+
 use self::database::vector_index::VectorIndex;
 
 pub struct AppState {
     pub pool: SqlitePool,
     pub clap_model_text_embedder: Arc<Mutex<Session>>,
     pub clap_model_audio_embedder: AudioEmbedder,
-    pub is_indexing: RwLock<bool>,
+    pub indexing_status: IndexingStatus,
     pub vector_index: RwLock<VectorIndex>,
 }

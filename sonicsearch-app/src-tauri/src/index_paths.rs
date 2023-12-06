@@ -8,6 +8,7 @@ use crate::{audio_index::update_audio_index, state::AppState};
 
 /// Add a path to the index
 #[tauri::command]
+#[specta::specta]
 pub async fn add_path_to_index(
     app_state: State<'_, AppState>,
     path: String,
@@ -24,6 +25,7 @@ pub async fn add_path_to_index(
 }
 
 #[tauri::command]
+#[specta::specta]
 pub async fn add_paths_to_index(
     app_state: State<'_, AppState>,
     paths: Vec<String>,
@@ -69,6 +71,7 @@ fn parse_path(path: &str) -> Result<PathBuf, String> {
 
 /// Get all paths from the index
 #[tauri::command]
+#[specta::specta]
 pub async fn get_paths_from_index(app_state: State<'_, AppState>) -> Result<Vec<PathBuf>, String> {
     get_paths_from_db(&app_state.pool).await
 }
@@ -87,6 +90,7 @@ async fn get_paths_from_db(pool: &SqlitePool) -> Result<Vec<PathBuf>, String> {
 
 /// Delete a path from the index
 #[tauri::command]
+#[specta::specta]
 pub async fn delete_path_from_index(
     app_state: State<'_, AppState>,
     path: String,

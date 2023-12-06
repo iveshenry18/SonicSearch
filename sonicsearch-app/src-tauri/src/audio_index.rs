@@ -22,9 +22,12 @@ use tauri::State;
 use twox_hash::XxHash64;
 use walkdir::WalkDir;
 
+use crate::audio_index::indexing_status::Status;
 use crate::index_paths::get_paths_from_index;
 use crate::state::database::{encode_embedding, vector_index};
 use crate::state::{audio_embedder::AudioEmbedder, AppState};
+
+pub mod indexing_status;
 
 fn compute_hash(file: &File) -> io::Result<String> {
     let hash_seed = 1023489u64;
@@ -52,17 +55,27 @@ fn is_audio_file(path: &Path) -> bool {
         .unwrap_or(false)
 }
 
-#[tauri::command]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, specta::Type, tauri_specta::Event)]
+pub struct UpdateAudioIndex(());
+
 pub async fn update_audio_index(app_state: State<'_, AppState>) -> result::Result<bool, String> {
     debug!("\n--- Updating audio file index... ---");
-    let mut is_indexing = app_state.is_indexing.write().await;
-    if *is_indexing {
-        // Should never happen, as is_indexing should be locked while index is occuring
-        debug!("Indexing already in progress.");
-        return Err("Indexing already in progress.".into());
-    } else {
-        *is_indexing = true;
+
+    let current_indexing_status = app_state.indexing_status.get_status().await;
+    if matches!(current_indexing_status, Status::Indexing(_)) {
+        debug!("Indexing already in progress");
+        return Ok(false);
     }
+
+    app_state
+        .indexing_status
+        .set_indexing(indexing_status::IndexingProgress {
+            total_duration: None,
+            duration_completed: None,
+        })
+        .await
+        .map_err(|err| format!("Failed to set indexing status: {:?}", err))?;
+
     let user_audio_dirs = get_paths_from_index(app_state.clone())
         .await
         .map_err(|err| format!("Failed to get user-defined directories: {:?}", err))?;
@@ -128,7 +141,12 @@ pub async fn update_audio_index(app_state: State<'_, AppState>) -> result::Resul
         .map_err(|err| format!("Failed to synchronize index: {:?}", err))?;
 
     debug!("\nAudio file index updated.");
-    *is_indexing = false;
+    app_state.indexing_status.set_idle().await.map_err(|err| {
+        format!(
+            "Failed to set indexing status to idle after indexing: {:?}",
+            err
+        )
+    })?;
     Ok(true)
 }
 

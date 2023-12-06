@@ -1,23 +1,51 @@
 import { createSignal, onMount } from "solid-js";
-import { invoke } from "@tauri-apps/api/tauri";
 import { VsSettingsGear } from "solid-icons/vs";
 import "./App.css";
 import { SettingsModal } from "./components/SettingsModal";
 import { Portal } from "solid-js/web";
 import { SearchZone } from "./components/SearchZone";
+import { Status, commands, events } from "./lib/specta-bindings";
+import { appWindow } from "@tauri-apps/api/window";
 
-export const [isIndexing, setIsIndexing] = createSignal(false);
 export async function updateAudioIndex() {
-  setIsIndexing(true);
-  await invoke("update_audio_index");
-  setIsIndexing(false);
+  console.debug("Updating audio index");
+  events.updateAudioIndex(appWindow).emit();
+}
+
+export const [indexingStatus, setIndexingStatus] = createSignal<Status>("Idle");
+function registerIndexingStatusListener() {
+  events.indexingStatusChanged(appWindow).listen((e) => {
+    console.debug("Indexing status changed", e);
+    setIndexingStatus(e.payload);
+  });
+}
+export function isIndexing() {
+  return indexingStatus() !== "Idle";
+}
+
+export const [currentlyIndexedPaths, setCurrentlyIndexedPaths] = createSignal<
+  string[]
+>([]);
+export async function syncCurrentlyIndexedPaths() {
+  try {
+    const pathsRes = await commands.getPathsFromIndex();
+    console.debug(pathsRes);
+    if (pathsRes.status === "error") {
+      console.error(pathsRes.error);
+    } else {
+      setCurrentlyIndexedPaths(pathsRes.data);
+    }
+  } catch (e) {
+    console.error(e);
+  }
 }
 
 function App() {
   const [settingsModalOpen, setSettingsModalOpen] = createSignal(false);
 
   onMount(() => {
-    // updateAudioIndex();
+    syncCurrentlyIndexedPaths();
+    registerIndexingStatusListener();
   });
 
   return (
