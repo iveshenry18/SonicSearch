@@ -1,6 +1,6 @@
 use futures::FutureExt;
 use hound::{SampleFormat, WavReader};
-use log::{debug, trace};
+use log::{debug, log_enabled, trace};
 use mel_spec::config::MelConfig;
 use mel_spec_pipeline::{Pipeline, PipelineConfig};
 use ndarray::{concatenate, Array2, Array3, Axis};
@@ -15,7 +15,7 @@ use std::{
 };
 use tokio::join;
 
-use anyhow::{Context, Result};
+use anyhow::{anyhow, Context, Result};
 use futures::future::join_all;
 use sqlx::SqlitePool;
 use tauri::State;
@@ -26,6 +26,8 @@ use crate::audio_index::indexing_status::Status;
 use crate::index_paths::get_paths_from_index;
 use crate::state::database::{encode_embedding, vector_index};
 use crate::state::{audio_embedder::AudioEmbedder, AppState};
+
+use self::indexing_status::IndexingStatus;
 
 pub mod indexing_status;
 
@@ -60,21 +62,18 @@ pub struct UpdateAudioIndex(());
 
 pub async fn update_audio_index(app_state: State<'_, AppState>) -> result::Result<bool, String> {
     debug!("\n--- Updating audio file index... ---");
+    let indexing_status = &app_state.indexing_status;
 
-    let current_indexing_status = app_state.indexing_status.get_status().await;
+    let current_indexing_status = indexing_status.get_status().await;
     if matches!(current_indexing_status, Status::Indexing(_)) {
         debug!("Indexing already in progress");
         return Ok(false);
     }
 
-    app_state
-        .indexing_status
-        .set_indexing(indexing_status::IndexingProgress {
-            total_duration: None,
-            duration_completed: None,
-        })
+    indexing_status
+        .set_started()
         .await
-        .map_err(|err| format!("Failed to set indexing status: {:?}", err))?;
+        .map_err(|err| format!("Failed to set indexing status to preindexing: {:?}", err))?;
 
     let user_audio_dirs = get_paths_from_index(app_state.clone())
         .await
@@ -83,22 +82,69 @@ pub async fn update_audio_index(app_state: State<'_, AppState>) -> result::Resul
     let audio_embedder = &app_state.clap_model_audio_embedder;
     let pool = app_state.pool.clone();
 
-    let upsert_futures: Vec<_> = user_audio_dirs
+    let audio_files = user_audio_dirs
         .into_iter()
         .flat_map(WalkDir::new)
         .filter(|dir| {
             dir.as_ref()
                 .is_ok_and(|ok_dir| ok_dir.path().is_file() && is_audio_file(ok_dir.path()))
         })
-        .map(move |dir| {
-            Box::pin(upsert_audio_file(
+        .map(|dir| dir.map_err(|err| anyhow::anyhow!("Failed to walk dir: {:?}", err)))
+        .collect::<Result<Vec<_>>>()
+        .context("Failed to collect audio files")
+        .map_err(|err| format!("Failed to collect audio files: {:?}", err))?;
+    debug!("Found {} audio files", audio_files.len());
+    indexing_status
+        .set_preindexing_start(audio_files.len() as u32)
+        .await
+        .map_err(|err| {
+            format!(
+                "Failed to set indexing status to preindexing_start: {:?}",
+                err
+            )
+        })?;
+
+    let audio_files_to_index_futures = audio_files
+        .iter()
+        .map(|dir| (dir, pool.clone()))
+        .map(move |(dir, pool)| {
+            Box::pin(preindex_files(
+                pool.to_owned(),
+                dir.path().to_owned(),
+                indexing_status,
+            ))
+        })
+        .collect::<Vec<_>>();
+    let audio_files_to_index = join_all(audio_files_to_index_futures)
+        .await
+        .into_iter()
+        .collect::<Result<Vec<_>>>()
+        .map_err(|err| format!("Failed to get audio files to index: {:?}", err))?
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>();
+
+    debug!("Indexing {} files", audio_files_to_index.len());
+    indexing_status
+        .set_indexing_started(audio_files_to_index.len() as u32)
+        .await
+        .map_err(|err| {
+            format!(
+                "Failed to set indexing status to indexing_started: {:?}",
+                err
+            )
+        })?;
+    let upsert_futures: Vec<_> = audio_files_to_index
+        .iter()
+        .map(|audio_file| {
+            Box::pin(index_new_file(
                 pool.to_owned(),
                 audio_embedder,
-                dir.expect("dir should exist").path().to_owned(),
+                audio_file,
+                indexing_status,
             ))
         })
         .collect();
-
     let upsert_futures = join_all(upsert_futures).then(|f| {
         debug!("All upserts completed. Stopping audio embedder.");
         audio_embedder.stop_processing_queue();
@@ -141,7 +187,7 @@ pub async fn update_audio_index(app_state: State<'_, AppState>) -> result::Resul
         .map_err(|err| format!("Failed to synchronize index: {:?}", err))?;
 
     debug!("\nAudio file index updated.");
-    app_state.indexing_status.set_idle().await.map_err(|err| {
+    indexing_status.set_idle().await.map_err(|err| {
         format!(
             "Failed to set indexing status to idle after indexing: {:?}",
             err
@@ -160,19 +206,40 @@ struct AudioFileRow {
     file_path: String,
 }
 
-pub async fn upsert_audio_file(
+/// Assesses whether a file with the same hash has already been indexed,
+/// and updates the path if the file has moved.
+/// Returns None if the file has already been indexed.
+/// Returns Some(LoadedAudioFile) if the file has not been indexed.
+async fn preindex_files(
     pool: SqlitePool,
-    audio_embedder: &AudioEmbedder,
     path: PathBuf,
-) -> Result<()> {
-    debug!("Upserting {} ", path.display());
+    indexing_status: &IndexingStatus,
+) -> Result<Option<LoadedAudioFile>> {
+    let file_name = match log_enabled!(log::Level::Debug) {
+        true => get_file_name(&path.to_string_lossy().into_owned()),
+        false => "file".into(),
+    };
+    debug!("Handling {} ", file_name);
     let file = File::open(&path)?;
+    debug!("Opened {}", file_name);
     let audio_file = LoadedAudioFile {
         file_hash: compute_hash(&file).context("Failed to compute hash")?,
         file_path: path.to_string_lossy().into_owned(),
     };
     // Save some memory :)
     drop(file);
+    debug!("Hashed {}", file_name);
+    // Anecdotally, the most useful loading checkpoint is after hashing but before checking the database
+    indexing_status
+        .increment_preindexed()
+        .await
+        .map_err(|err| {
+            anyhow!(
+                "Failed to increment preindexing status for {}: {:?}",
+                get_file_name(&audio_file.file_path),
+                err
+            )
+        })?;
 
     let existing_row = sqlx::query_as!(
         AudioFileRow,
@@ -185,17 +252,18 @@ pub async fn upsert_audio_file(
         "Failed while finding existing row for {}",
         get_file_name(&audio_file.file_path)
     ))?;
+    debug!("Fetched {}", file_name);
 
     if existing_row.is_none() {
-        debug!("{} is new, indexing...", path.display());
-        index_new_file(pool, audio_embedder, &audio_file).await?;
+        debug!("{} is new, indexing...", file_name);
+        return Ok(Some(audio_file));
     } else if existing_row
         .as_ref()
         .is_some_and(|row| row.file_path != audio_file.file_path)
     {
         debug!(
             "{} has moved from {}, updating path...",
-            path.display(),
+            file_name,
             existing_row
                 .as_ref()
                 .context("Could not get existing row")?
@@ -203,13 +271,17 @@ pub async fn upsert_audio_file(
         );
         update_path(pool, &audio_file).await?;
     } else {
-        debug!("{} already indexed.", path.display());
+        debug!(
+            "{} already indexed and in the correct path. Doing nothing.",
+            file_name
+        );
     }
 
-    Ok(())
+    Ok(None)
 }
 
 async fn update_path(pool: SqlitePool, audio_file: &LoadedAudioFile) -> Result<()> {
+    trace!("Updating path for {}...", audio_file.file_path);
     sqlx::query(r#"UPDATE audio_file SET file_path = ? WHERE file_hash = ?"#)
         .bind(&audio_file.file_path)
         .bind(&audio_file.file_hash)
@@ -235,7 +307,8 @@ async fn index_new_file(
     pool: SqlitePool,
     audio_embedder: &AudioEmbedder,
     audio_file: &LoadedAudioFile,
-) -> Result<u32> {
+    indexing_status: &IndexingStatus,
+) -> Result<()> {
     // Split file into segments and compute embeddings for each segment
     // Once all are computed, insert into database
 
@@ -277,8 +350,15 @@ async fn index_new_file(
     }
     sql_transaction.commit().await?;
     debug!("Insertion completed for {}", audio_file.file_path);
+    indexing_status.increment_indexed().await.map_err(|err| {
+        anyhow!(
+            "Failed to increment indexing status for {}: {:?}",
+            get_file_name(&audio_file.file_path),
+            err
+        )
+    })?;
 
-    Ok(1)
+    Ok(())
 }
 
 async fn segment_and_embed_file(

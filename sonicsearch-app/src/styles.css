@@ -110,6 +110,9 @@ button.refresh-button {
   padding: 0.8rem;
   width: 100%;
   box-shadow: 0 2px 2px rgba(0, 0, 0, 0.2);
+  background-color: #232323;
+  background-size: 100% 100%;
+  transition: background-size 0.5s ease;
 }
 
 button.refresh-button p {

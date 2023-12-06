@@ -54,9 +54,10 @@ updateAudioIndex: "plugin:tauri-specta:update-audio-index"
 
 /** user-defined types **/
 
-export type IndexingProgress = { total_duration: number | null; duration_completed: number | null }
+export type IndexingProgress = { total: number; indexed: number }
 export type IndexingStatusChanged = Status
-export type Status = { Indexing: IndexingProgress } | "Idle"
+export type PreIndexingProgress = { total: number; preindexed: number }
+export type Status = "Started" | { PreIndexing: PreIndexingProgress } | { Indexing: IndexingProgress } | "Idle"
 export type UpdateAudioIndex = null
 
 /** tauri-specta globals **/

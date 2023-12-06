@@ -2,13 +2,9 @@ import { invoke } from "@tauri-apps/api";
 import { listen, TauriEvent, UnlistenFn } from "@tauri-apps/api/event";
 import { onMount, onCleanup, createSignal } from "solid-js";
 import { AiOutlineClose, AiOutlineDelete } from "solid-icons/ai";
-import {
-  currentlyIndexedPaths,
-  isIndexing,
-  setCurrentlyIndexedPaths,
-  updateAudioIndex,
-} from "../App";
+import { currentlyIndexedPaths, setCurrentlyIndexedPaths } from "../App";
 import { commands } from "../lib/specta-bindings";
+import { IndexingButton } from "./IndexingButton";
 
 function getLastPortionOfPath(path: string) {
   const splitPath = path.split("/");
@@ -151,13 +147,7 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
             ))}
           </ul>
         </div>
-        <button
-          onClick={updateAudioIndex}
-          disabled={isIndexing()}
-          class={isIndexing() ? "disabled refresh-button" : "refresh-button"}
-        >
-          <p>{isIndexing() ? "Refreshing..." : "Refresh Index"}</p>
-        </button>
+        <IndexingButton />
       </div>
     </div>
   );
