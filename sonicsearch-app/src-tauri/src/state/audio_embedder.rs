@@ -1,5 +1,6 @@
 use anyhow::{Context, Result};
 use futures::lock::Mutex;
+use log::{debug, info};
 use ndarray::{stack, Array1, Array3, Axis, CowArray};
 use ort::Session;
 use std::sync::Arc;
@@ -47,15 +48,15 @@ impl AudioEmbedder {
             .await
             .context("Did not receive output from audio embedder")?;
 
-        println!("Received output of shape {:?}", result.shape());
+        debug!("Received output of shape {:?}", result.shape());
         Ok(result)
     }
 
     /// This is the function that actually processes the queue.
     /// It continually runs and waits for inputs to be added to the queue.
     pub async fn begin_processing_queue(&self) -> Result<()> {
-        println!("Starting to process queue");
-        const MAX_BATCH_SIZE: usize = 512;
+        debug!("Starting to process queue");
+        const MAX_BATCH_SIZE: usize = 256;
         loop {
             let mut inputs_to_process = Vec::new();
             let session = self.session.lock().await;
@@ -70,7 +71,7 @@ impl AudioEmbedder {
                 );
             }
             if inputs_to_process.is_empty() {
-                print!("No inputs to process. ");
+                info!("No inputs to process. ");
                 // block until either queue_has_contents or stop_processing_queue notifies
                 // if queue_has_contents is notified, then we continue processing
                 // if stop_processing_queue is notified, then we break
@@ -86,7 +87,7 @@ impl AudioEmbedder {
                 }
             }
 
-            println!("Embedding {} input(s)", inputs_to_process.len());
+            debug!("Embedding {} input(s)", inputs_to_process.len());
             let (input_batch, senders): (Vec<Array3<f64>>, Vec<Sender<Array1<f32>>>) =
                 inputs_to_process
                     .into_iter()
@@ -126,7 +127,7 @@ impl AudioEmbedder {
                 })
                 .collect::<Result<Vec<_>>>()?;
             assert_eq!(outputs.len(), senders.len());
-            println!(
+            debug!(
                 "Finished embedding. Sending {} outputs of size {}.",
                 outputs.len(),
                 outputs
@@ -136,12 +137,12 @@ impl AudioEmbedder {
             );
 
             for (output, sender) in outputs.into_iter().zip(senders.into_iter()) {
-                println!("Sending output of shape {:?} to sender", output.shape());
+                debug!("Sending output of shape {:?} to sender", output.shape());
                 sender.send(output).expect("Failed to send output");
-                println!("Sent output");
+                debug!("Sent output");
             }
         }
-        println!("Exiting process queue");
+        debug!("Exiting process queue");
         Ok(())
     }
 

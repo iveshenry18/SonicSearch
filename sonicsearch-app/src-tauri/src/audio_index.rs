@@ -1,6 +1,6 @@
 use futures::FutureExt;
 use hound::{SampleFormat, WavReader};
-use log::debug;
+use log::{debug, trace};
 use mel_spec::config::MelConfig;
 use mel_spec_pipeline::{Pipeline, PipelineConfig};
 use ndarray::{concatenate, Array2, Array3, Axis};
@@ -439,7 +439,7 @@ fn resample(samples: &[f32], source_sample_rate: u32) -> Result<Vec<f32>> {
     samples
         .chunks(CHUNK_SIZE_IN)
         .map(|sample_chunk| {
-            print!("\rResampling chunk of size {:?}", sample_chunk.len());
+            trace!("\rResampling chunk of size {:?}", sample_chunk.len());
             // Process
             if sample_chunk.len() < CHUNK_SIZE_IN {
                 resampled_samples.append(
@@ -586,7 +586,7 @@ fn compute_mel_spec_from_pcm(segment_pcm: &[f32]) -> Result<Array3<f64>> {
 
     let mut mel_spec: Array2<f64> = Array2::zeros((MEL_CONFIG.n_mels, 0));
     while let Ok((mel_idx, mel_spec_chunk)) = rx_clone.recv() {
-        print!("\rReceived mel spectrogram chunk {:?}", mel_idx);
+        trace!("\rReceived mel spectrogram chunk {:?}", mel_idx);
         mel_spec
             .append(Axis(1), mel_spec_chunk.view())
             .context(format!(

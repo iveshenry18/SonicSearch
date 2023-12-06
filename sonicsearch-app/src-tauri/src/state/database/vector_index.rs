@@ -8,10 +8,11 @@ use sqlx::SqlitePool;
 use crate::state::database::decode_embedding;
 
 const DEFAULT_NB_ELEM: usize = 5_000;
-const MAX_NB_CONNECTION: usize = 24;
-const EF_C: usize = 400;
+const MAX_NB_CONNECTION: usize = 16;
+const EF_C: usize = 200;
 const K_LIMIT: usize = 10;
-const EF_ARG: usize = 20;
+const EF_ARG: usize = 12;
+const DEFAULT_NB_LAYER: usize = 8;
 
 // "The parameter ef controls the width of the search in the lowest level, it must be greater than number of neighbours asked.
 // A rule of thumb could be between knbn and max_nb_connection."
@@ -30,7 +31,7 @@ pub fn initialize_index(nb_elem: Option<usize>) -> VectorIndex {
     debug!("Initializing index");
 
     let nb_elem = nb_elem.unwrap_or(DEFAULT_NB_ELEM);
-    let nb_layer = 16.min((nb_elem as f32).ln().trunc() as usize);
+    let nb_layer = DEFAULT_NB_LAYER.min((nb_elem as f32).ln().trunc() as usize);
 
     let hnsw =
         Hnsw::<f32, DistCosine>::new(MAX_NB_CONNECTION, nb_elem, nb_layer, EF_C, DistCosine {});
@@ -52,6 +53,7 @@ struct IndexRow {
 /// This function only indexes embeddings that have not been indexed yet.
 pub async fn synchronize_index(pool: &SqlitePool, vector_index: &mut VectorIndex) -> Result<()> {
     debug!("Synchronizing index");
+    vector_index.index.set_searching_mode(false);
     let id_embeddings: Vec<IndexRow> = sqlx::query_as!(
         IndexRow,
         r#"
@@ -99,6 +101,8 @@ pub async fn synchronize_index(pool: &SqlitePool, vector_index: &mut VectorIndex
         .map(|(_, rowid)| rowid)
         .collect::<Vec<_>>();
     vector_index.indexed_ids.extend(newly_indexed_ids);
+
+    vector_index.index.set_searching_mode(true);
 
     debug!("Index synchronized");
 
