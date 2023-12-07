@@ -1,4 +1,3 @@
-import { invoke } from "@tauri-apps/api";
 import { listen, TauriEvent, UnlistenFn } from "@tauri-apps/api/event";
 import { onMount, onCleanup, createSignal } from "solid-js";
 import { AiOutlineClose, AiOutlineDelete } from "solid-icons/ai";
@@ -40,10 +39,12 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
 
   async function deletePathFromIndex(path: string) {
     try {
-      const currentPaths = await invoke<string[]>("delete_path_from_index", {
-        path,
-      });
-      setCurrentlyIndexedPaths(currentPaths);
+      const deleteRes = await commands.deletePathFromIndex(path);
+      if (deleteRes.status === "error") {
+        console.error(deleteRes.error);
+      } else {
+        setCurrentlyIndexedPaths(deleteRes.data);
+      }
     } catch (e) {
       console.error(e);
     }

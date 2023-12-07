@@ -33,9 +33,6 @@ export function SearchZone() {
     const currentSearchString = searchString();
     console.log(`Searching for ${currentSearchString}`);
     const res = await commands.searchIndex(currentSearchString);
-    // const res = await invoke("search_index", {
-    //   searchString: currentSearchString,
-    // });
     setIsSearching(false);
 
     console.log(res);
@@ -70,6 +67,7 @@ export function SearchZone() {
           id="greet-input"
           onChange={(e) => setSearchString(e.currentTarget.value)}
           placeholder="Enter a sound..."
+          disabled={isSearching()}
         />
         <button
           type="submit"

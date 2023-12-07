@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use futures::lock::Mutex;
-use log::{debug, info};
+use log::{debug, info, trace};
 use ndarray::{stack, Array1, Array3, Axis, CowArray};
 use ort::Session;
 use std::sync::Arc;
@@ -64,10 +64,12 @@ impl AudioEmbedder {
             {
                 let mut input_queue = self.input_queue.lock().await;
                 let input_queue_len = input_queue.len();
-                inputs_to_process.append(
-                    &mut (*input_queue)
-                        .drain(0..MAX_BATCH_SIZE.min(input_queue_len))
-                        .collect::<Vec<_>>(),
+                let batch_size = MAX_BATCH_SIZE.min(input_queue_len);
+                inputs_to_process
+                    .append(&mut (*input_queue).drain(0..batch_size).collect::<Vec<_>>());
+                debug!(
+                    "Embedding batch of size {} from queue of length {}",
+                    batch_size, input_queue_len
                 );
             }
             if inputs_to_process.is_empty() {
@@ -137,9 +139,9 @@ impl AudioEmbedder {
             );
 
             for (output, sender) in outputs.into_iter().zip(senders.into_iter()) {
-                debug!("Sending output of shape {:?} to sender", output.shape());
+                trace!("Sending output of shape {:?} to sender", output.shape());
                 sender.send(output).expect("Failed to send output");
-                debug!("Sent output");
+                trace!("Sent output");
             }
         }
         debug!("Exiting process queue");

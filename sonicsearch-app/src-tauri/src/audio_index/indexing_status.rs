@@ -109,26 +109,21 @@ impl IndexingStatus {
         }
     }
 
-    pub async fn increment_indexed(&self) -> Result<(), String> {
+    pub async fn increment_n_indexed(&self, n: u32) -> Result<(), String> {
         let mut status = self.status.write().await;
         // If we're indexing, increment the number of indexed files
         if let Status::InProgress(progress) = status.deref_mut() {
             if let Some(indexing_progress) = &mut progress.indexing {
-                indexing_progress.newly_indexed += 1;
+                indexing_progress.newly_indexed += n;
                 trace!(
                     "indexed: {}, total: {}, percent: {}",
                     indexing_progress.newly_indexed,
                     indexing_progress.total_to_index,
                     indexing_progress.newly_indexed % (indexing_progress.total_to_index / 100)
                 );
-                // Only emit update on the percentiles
-                if indexing_progress.newly_indexed % (indexing_progress.total_to_index / 100) == 0 {
-                    IndexingStatusChanged(status.clone())
-                        .emit_all(&self.app_handle)
-                        .map_err(|err| err.to_string())
-                } else {
-                    Ok(())
-                }
+                IndexingStatusChanged(status.clone())
+                    .emit_all(&self.app_handle)
+                    .map_err(|err| err.to_string())
             } else {
                 Err("Cannot increment indexed if not indexing".to_string())
             }
@@ -145,5 +140,9 @@ impl IndexingStatus {
 
     pub async fn get_status(&self) -> Status {
         self.status.read().await.clone()
+    }
+    
+    pub async fn emit_status(&self) -> tauri::Result<()> {
+        IndexingStatusChanged(self.get_status().await).emit_all(&self.app_handle)
     }
 }

@@ -57,6 +57,28 @@
   opacity: 0.7;
 }
 
+div.splash {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  margin: 0px;
+  justify-content: center;
+  text-align: center;
+  max-height: fit-content;
+}
+
+div.splash h3 {
+  font-size: 1.4rem;
+  font-weight: 400;
+  color: #efefef;
+  margin-bottom: 0.2rem;
+}
+
+div.splash p {
+  margin-top: 0.2rem;
+  color: #afafaf;
+}
+
 .row {
   display: flex;
   justify-content: center;
@@ -114,22 +136,33 @@ button.refresh-button {
   background-size: 100% 100%;
   transition: background-size 0.5s ease;
   background-image: linear-gradient(
-    to right, 
-    var(--progress-bg-color) 0%, 
-    var(--progress-bg-color) var(--progress-percentage), 
-    #232323 var(--progress-percentage), 
+    to right,
+    var(--progress-bg-color) 0%,
+    var(--progress-bg-color) var(--progress-percentage),
+    #232323 var(--progress-percentage),
     #232323 100%
   );
+}
+
+button.disabled {
+  opacity: 0.6;
+  cursor: unset;
 }
 
 button.refresh-button p {
   margin: 0;
   font-size: 0.8rem;
+  color: #f0f0f0;
 }
 
-button.disabled {
-  opacity: 0.5;
-  cursor: unset;
+p.small {
+  font-weight: 300;
+  opacity: 0.7;
+  font-style: italic;
+}
+
+button.refresh-button p.small {
+  font-size: 0.7rem;
 }
 
 #greet-input {
@@ -243,15 +276,16 @@ div.settings-modal-base {
   position: fixed;
   top: 0;
   left: 0;
+  margin: 0;
+  padding: 0;
   width: 100vw;
   height: 100vh;
+
   background-color: rgba(6, 6, 6, 0.6);
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 1rem;
-  padding: 1rem;
 }
 
 div.settings-modal {

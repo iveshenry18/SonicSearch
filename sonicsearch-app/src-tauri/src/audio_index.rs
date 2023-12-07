@@ -1,5 +1,5 @@
 use hound::{SampleFormat, WavReader};
-use log::{debug, info, log_enabled, trace};
+use log::{debug, info, log_enabled, trace, warn};
 use mel_spec::config::MelConfig;
 use mel_spec_pipeline::{Pipeline, PipelineConfig};
 use ndarray::{concatenate, Array2, Array3, Axis};
@@ -62,10 +62,17 @@ pub struct UpdateAudioIndex(());
 pub async fn update_audio_index(app_state: State<'_, AppState>) -> result::Result<bool, String> {
     debug!("\n--- Updating audio file index... ---");
     let indexing_status = &app_state.indexing_status;
+    let vector_index = &app_state.vector_index;
 
     let current_indexing_status = indexing_status.get_status().await;
     if matches!(current_indexing_status, Status::InProgress(_)) {
         debug!("Indexing already in progress");
+        indexing_status.emit_status().await.map_err(|err| {
+            format!(
+                "Failed to emit indexing status while indexing already in progress. {:?}",
+                err
+            )
+        })?;
         return Ok(false);
     }
 
@@ -157,7 +164,7 @@ pub async fn update_audio_index(app_state: State<'_, AppState>) -> result::Resul
                         batch_i,
                         audio_file_chunks_len
                     );
-                    index_new_file(pool.clone(), audio_embedder, audio_file, indexing_status)
+                    index_new_file(pool.clone(), audio_embedder, audio_file)
                 })
                 .collect::<Vec<_>>();
             index_results.append(
@@ -166,7 +173,39 @@ pub async fn update_audio_index(app_state: State<'_, AppState>) -> result::Resul
                     .await
                     .into_iter()
                     .collect::<Vec<Result<_>>>(),
-            )
+            );
+            info!(
+                "Indexed {} of {} batches",
+                batch_i + 1,
+                audio_file_chunks_len
+            );
+            let mut vector_index_lock = vector_index.write().await;
+            let locked_index = &mut *vector_index_lock;
+
+            match vector_index::synchronize_index(&pool, locked_index)
+                .await {
+                Ok(_) => (),
+                Err(err) => {
+                    warn!(
+                        "Failed to synchronize index after batch {} of {}: {:?}",
+                        batch_i, audio_file_chunks_len, err
+                    );
+                },
+            }
+            drop(vector_index_lock);
+
+            match indexing_status
+                .increment_n_indexed(audio_file_chunk.len() as u32)
+                .await
+            {
+                Ok(_) => (),
+                Err(err) => {
+                    warn!(
+                        "Failed to increment indexing status for batch {} of {}: {:?}",
+                        batch_i, audio_file_chunks_len, err
+                    );
+                }
+            };
         }
 
         info!("All indexing completed. Stopping audio embedder.");
@@ -203,11 +242,6 @@ pub async fn update_audio_index(app_state: State<'_, AppState>) -> result::Resul
         upsert_results.0,
         upsert_results.1.len()
     );
-
-    let locked_index = &mut *app_state.vector_index.write().await;
-    vector_index::synchronize_index(&app_state.pool, locked_index)
-        .await
-        .map_err(|err| format!("Failed to synchronize index: {:?}", err))?;
 
     debug!("\nAudio file index updated.");
     indexing_status.set_idle().await.map_err(|err| {
@@ -330,7 +364,6 @@ async fn index_new_file(
     pool: SqlitePool,
     audio_embedder: &AudioEmbedder,
     audio_file: &LoadedAudioFile,
-    indexing_status: &IndexingStatus,
 ) -> Result<()> {
     // Split file into segments and compute embeddings for each segment
     // Once all are computed, insert into database
@@ -377,10 +410,6 @@ async fn index_new_file(
         "Insertion completed for {}. Incrementing status.",
         file_name
     );
-    indexing_status
-        .increment_indexed()
-        .await
-        .map_err(|err| anyhow!("Failed to increment indexed for {}: {:?}", file_name, err))?;
 
     Ok(())
 }
@@ -407,10 +436,11 @@ async fn segment_and_embed_file(
         get_file_name(&audio_file.file_path)
     );
     let audio_segments = split_audio_into_segments(&pcm_audio);
+    let num_audio_segments = audio_segments.len();
     debug!(
         "Split {} into {} segments with lengths {:?}",
         get_file_name(&audio_file.file_path),
-        audio_segments.len(),
+        num_audio_segments,
         audio_segments
             .iter()
             .map(|segment| segment.pcm_audio.len())
@@ -423,8 +453,9 @@ async fn segment_and_embed_file(
                 .enumerate()
                 .map(|(i, segment)| async move {
                     debug!(
-                        "Computing embedding for segment {} of {}...",
+                        "Computing embedding for segment {}/{} of {}...",
                         i,
+                        num_audio_segments,
                         get_file_name(&audio_file.file_path)
                     );
                     let segment_embedding =

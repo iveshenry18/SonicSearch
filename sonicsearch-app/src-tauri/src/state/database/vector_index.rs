@@ -68,7 +68,7 @@ pub async fn synchronize_index(pool: &SqlitePool, vector_index: &mut VectorIndex
     .fetch_all(pool)
     .await?;
     debug!(
-        "Found {} embeddings to add to the index",
+        "{} total embeddings",
         id_embeddings.len()
     );
 
@@ -91,6 +91,10 @@ pub async fn synchronize_index(pool: &SqlitePool, vector_index: &mut VectorIndex
         .iter()
         .map(|(embedding, rowid)| (embedding, *rowid))
         .collect::<Vec<_>>();
+    debug!(
+        "{} new embeddings to add to the index",
+        new_id_embeddings.len()
+    );
 
     debug!("Adding embeddings to index");
     vector_index.index.parallel_insert(&new_id_embeddings);

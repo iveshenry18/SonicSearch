@@ -67,7 +67,10 @@ function App() {
         <h2>a search engine for your sounds</h2>
       </div>
       {!isInitialized() ? (
-        <p>Initializing... please hold :)</p>
+        <div class="splash">
+          <h3>Initializing...</h3>
+          <p class="small"> (please hold)</p>
+        </div>
       ) : (
         <>
           <button
