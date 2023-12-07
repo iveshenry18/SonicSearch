@@ -7,12 +7,23 @@ import { SearchZone } from "./components/SearchZone";
 import { Status, commands, events } from "./lib/specta-bindings";
 import { appWindow } from "@tauri-apps/api/window";
 
+export const [isInitialized, setIsInitialized] = createSignal(false);
+export async function initializeBackend() {
+  const res = await commands.initializeBackend();
+  if (res.status === "error") {
+    console.error(res.error);
+  } else {
+    setIsInitialized(true);
+  }
+}
+
 export async function updateAudioIndex() {
   console.debug("Updating audio index");
   events.updateAudioIndex(appWindow).emit();
 }
 
 export const [indexingStatus, setIndexingStatus] = createSignal<Status>("Idle");
+
 function registerIndexingStatusListener() {
   events.indexingStatusChanged(appWindow).listen((e) => {
     console.debug("Indexing status changed", e);
@@ -46,6 +57,7 @@ function App() {
   onMount(() => {
     syncCurrentlyIndexedPaths();
     registerIndexingStatusListener();
+    initializeBackend();
   });
 
   return (
@@ -54,32 +66,38 @@ function App() {
         <h1>SonicSearch</h1>
         <h2>a search engine for your sounds</h2>
       </div>
-      <button
-        class="settings"
-        onClick={() => setSettingsModalOpen((prev) => !prev)}
-      >
-        <VsSettingsGear class="gear-icon" />
-      </button>
-      <SearchZone />
-      {settingsModalOpen() && (
-        <Portal>
-          <div
-            class="settings-modal-base"
-            onClick={() => setSettingsModalOpen(false)}
+      {!isInitialized() ? (
+        <p>Initializing... please hold :)</p>
+      ) : (
+        <>
+          <button
+            class="settings"
+            onClick={() => setSettingsModalOpen((prev) => !prev)}
           >
-            <div
-              onClick={(e) => {
-                e.stopPropagation();
-              }}
-            >
-              <SettingsModal
-                onClose={() => {
-                  setSettingsModalOpen(false);
-                }}
-              />
-            </div>
-          </div>
-        </Portal>
+            <VsSettingsGear class="gear-icon" />
+          </button>
+          <SearchZone />
+          {settingsModalOpen() && (
+            <Portal>
+              <div
+                class="settings-modal-base"
+                onClick={() => setSettingsModalOpen(false)}
+              >
+                <div
+                  onClick={(e) => {
+                    e.stopPropagation();
+                  }}
+                >
+                  <SettingsModal
+                    onClose={() => {
+                      setSettingsModalOpen(false);
+                    }}
+                  />
+                </div>
+              </div>
+            </Portal>
+          )}
+        </>
       )}
     </div>
   );

@@ -1,6 +1,5 @@
-use futures::FutureExt;
 use hound::{SampleFormat, WavReader};
-use log::{debug, log_enabled, trace};
+use log::{debug, info, log_enabled, trace};
 use mel_spec::config::MelConfig;
 use mel_spec_pipeline::{Pipeline, PipelineConfig};
 use ndarray::{concatenate, Array2, Array3, Axis};
@@ -65,7 +64,7 @@ pub async fn update_audio_index(app_state: State<'_, AppState>) -> result::Resul
     let indexing_status = &app_state.indexing_status;
 
     let current_indexing_status = indexing_status.get_status().await;
-    if matches!(current_indexing_status, Status::Indexing(_)) {
+    if matches!(current_indexing_status, Status::InProgress(_)) {
         debug!("Indexing already in progress");
         return Ok(false);
     }
@@ -82,7 +81,7 @@ pub async fn update_audio_index(app_state: State<'_, AppState>) -> result::Resul
     let audio_embedder = &app_state.clap_model_audio_embedder;
     let pool = app_state.pool.clone();
 
-    let audio_files = user_audio_dirs
+    let indexable_files = user_audio_dirs
         .into_iter()
         .flat_map(WalkDir::new)
         .filter(|dir| {
@@ -93,9 +92,9 @@ pub async fn update_audio_index(app_state: State<'_, AppState>) -> result::Resul
         .collect::<Result<Vec<_>>>()
         .context("Failed to collect audio files")
         .map_err(|err| format!("Failed to collect audio files: {:?}", err))?;
-    debug!("Found {} audio files", audio_files.len());
+    debug!("Found {} indexable files", indexable_files.len());
     indexing_status
-        .set_preindexing_start(audio_files.len() as u32)
+        .set_preindexing_started(indexable_files.len() as u32)
         .await
         .map_err(|err| {
             format!(
@@ -104,7 +103,7 @@ pub async fn update_audio_index(app_state: State<'_, AppState>) -> result::Resul
             )
         })?;
 
-    let audio_files_to_index_futures = audio_files
+    let audio_files_to_index_futures = indexable_files
         .iter()
         .map(|dir| (dir, pool.clone()))
         .map(move |(dir, pool)| {
@@ -124,7 +123,7 @@ pub async fn update_audio_index(app_state: State<'_, AppState>) -> result::Resul
         .flatten()
         .collect::<Vec<_>>();
 
-    debug!("Indexing {} files", audio_files_to_index.len());
+    debug!("Indexing {} new files", audio_files_to_index.len());
     indexing_status
         .set_indexing_started(audio_files_to_index.len() as u32)
         .await
@@ -134,25 +133,49 @@ pub async fn update_audio_index(app_state: State<'_, AppState>) -> result::Resul
                 err
             )
         })?;
-    let upsert_futures: Vec<_> = audio_files_to_index
-        .iter()
-        .map(|audio_file| {
-            Box::pin(index_new_file(
-                pool.to_owned(),
-                audio_embedder,
-                audio_file,
-                indexing_status,
-            ))
-        })
-        .collect();
-    let upsert_futures = join_all(upsert_futures).then(|f| {
-        debug!("All upserts completed. Stopping audio embedder.");
+
+    // Break up into batches to improve checkpointing
+    // Each batch will be processed in parallel,
+    // but the batches will be processed sequentially
+    const INDEX_BATCH_SIZE: usize = 10;
+    let audio_file_chunks = audio_files_to_index.chunks(INDEX_BATCH_SIZE);
+    let audio_file_chunks_len = audio_file_chunks.len();
+    let index_future = async move {
+        let mut index_results = vec![];
+        info!("Indexing {} batches sequentially", audio_file_chunks_len);
+        for (batch_i, audio_file_chunk) in audio_file_chunks.enumerate() {
+            debug!("Indexing batch {} of {}", batch_i, audio_file_chunks_len);
+            let pool = pool.clone();
+            let intra_batch_futures = audio_file_chunk
+                .iter()
+                .enumerate()
+                .map(|(file_i, audio_file)| {
+                    debug!(
+                        "Indexing file {} of {} in batch {} of {}",
+                        file_i,
+                        audio_file_chunk.len(),
+                        batch_i,
+                        audio_file_chunks_len
+                    );
+                    index_new_file(pool.clone(), audio_embedder, audio_file, indexing_status)
+                })
+                .collect::<Vec<_>>();
+            index_results.append(
+                // Process intra-batch futures in parallel
+                &mut join_all(intra_batch_futures)
+                    .await
+                    .into_iter()
+                    .collect::<Vec<Result<_>>>(),
+            )
+        }
+
+        info!("All indexing completed. Stopping audio embedder.");
         audio_embedder.stop_processing_queue();
-        async { f }
-    });
+        index_results
+    };
 
     let embedder_future = audio_embedder.begin_processing_queue();
-    let (embedder_result, upsert_results) = join!(embedder_future, upsert_futures);
+    let (embedder_result, upsert_results) = join!(embedder_future, index_future);
 
     embedder_result
         .context("Model should run successfully")
@@ -311,14 +334,15 @@ async fn index_new_file(
 ) -> Result<()> {
     // Split file into segments and compute embeddings for each segment
     // Once all are computed, insert into database
-
+    let file_name = get_file_name(&audio_file.file_path);
+    debug!("Splitting {} into segments", file_name);
     let segments_with_embeddings = segment_and_embed_file(audio_file, audio_embedder).await?;
 
     // Insert all segments and audio file into database
     debug!(
         "Inserting {} segments of {} into database...",
         segments_with_embeddings.len(),
-        get_file_name(&audio_file.file_path)
+        file_name
     );
     let mut sql_transaction = pool.begin().await.context(format!(
         "Failed while waiting for transaction to insert embeddings for {}",
@@ -349,14 +373,14 @@ async fn index_new_file(
             .await.expect("Segment insertion should succeed");
     }
     sql_transaction.commit().await?;
-    debug!("Insertion completed for {}", audio_file.file_path);
-    indexing_status.increment_indexed().await.map_err(|err| {
-        anyhow!(
-            "Failed to increment indexing status for {}: {:?}",
-            get_file_name(&audio_file.file_path),
-            err
-        )
-    })?;
+    debug!(
+        "Insertion completed for {}. Incrementing status.",
+        file_name
+    );
+    indexing_status
+        .increment_indexed()
+        .await
+        .map_err(|err| anyhow!("Failed to increment indexed for {}: {:?}", file_name, err))?;
 
     Ok(())
 }

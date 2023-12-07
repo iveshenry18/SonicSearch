@@ -109,7 +109,7 @@ pub async fn synchronize_index(pool: &SqlitePool, vector_index: &mut VectorIndex
     Ok(())
 }
 
-#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(serde::Serialize, serde::Deserialize, specta::Type)]
 pub struct SearchResult {
     file_path: String,
     starting_timestamp: f64,

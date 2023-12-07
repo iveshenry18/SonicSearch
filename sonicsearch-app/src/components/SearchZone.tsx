@@ -1,31 +1,15 @@
-import { invoke } from "@tauri-apps/api";
 import { basename } from "@tauri-apps/api/path";
 import { Command } from "@tauri-apps/api/shell";
 import { createSignal } from "solid-js";
-import { z } from "zod";
 import { AudioPlayer } from "./AudioPlayer";
 import { AiFillFolderOpen } from "solid-icons/ai";
+import { commands } from "../lib/specta-bindings";
 
 type ProcessedSearchResult = {
   fullPath: string;
   basename: string;
   startingTimestamp: number;
 };
-
-const searchResult = z
-  .object({
-    file_path: z.string(),
-    starting_timestamp: z.number(),
-    distance: z.number(),
-  })
-  .transform((obj) => {
-    return {
-      fullPath: obj.file_path,
-      startingTimestamp: obj.starting_timestamp,
-      distance: obj.distance,
-    };
-  });
-const SearchIndexResult = z.array(searchResult);
 
 function secondsToString(seconds: number) {
   const SECONDS_IN_HOUR = 3600;
@@ -48,25 +32,25 @@ export function SearchZone() {
     setIsSearching(true);
     const currentSearchString = searchString();
     console.log(`Searching for ${currentSearchString}`);
-    const res = await invoke("search_index", {
-      searchString: currentSearchString,
-    });
+    const res = await commands.searchIndex(currentSearchString);
+    // const res = await invoke("search_index", {
+    //   searchString: currentSearchString,
+    // });
     setIsSearching(false);
 
     console.log(res);
-    const parseRes = SearchIndexResult.safeParse(res);
-    if (!parseRes.success) {
-      console.error(parseRes.error);
+    if (res.status === "error") {
+      console.error(res.error);
       return;
     }
-    const parsedRes = parseRes.data;
+    const parsedRes = res.data;
 
     const processedRes = await Promise.all(
       parsedRes.map(async (res) => {
         return {
-          fullPath: res.fullPath,
-          basename: await basename(res.fullPath),
-          startingTimestamp: res.startingTimestamp,
+          fullPath: res.file_path,
+          basename: await basename(res.file_path),
+          startingTimestamp: res.starting_timestamp,
         } satisfies ProcessedSearchResult;
       })
     );

@@ -1,5 +1,6 @@
 use std::ops::DerefMut;
 
+use chrono::{DateTime, Utc};
 use log::trace;
 use tauri::AppHandle;
 
@@ -8,21 +9,28 @@ use tokio::sync::RwLock;
 
 #[derive(Clone, Debug, serde::Serialize, specta::Type)]
 pub struct PreIndexingProgress {
-    pub(crate) total: u32,
+    pub(crate) started_preindexing: DateTime<Utc>,
     pub(crate) preindexed: u32,
 }
 
 #[derive(Clone, Debug, serde::Serialize, specta::Type)]
 pub struct IndexingProgress {
-    pub(crate) total: u32,
-    pub(crate) indexed: u32,
+    pub(crate) started_indexing: DateTime<Utc>,
+    pub(crate) newly_indexed: u32,
+    pub(crate) total_to_index: u32,
+}
+
+#[derive(Clone, Debug, serde::Serialize, specta::Type)]
+pub struct Progress {
+    preindexing: PreIndexingProgress,
+    indexing: Option<IndexingProgress>,
+    total: u32,
 }
 
 #[derive(Clone, Debug, serde::Serialize, specta::Type)]
 pub enum Status {
     Started,
-    PreIndexing(PreIndexingProgress),
-    Indexing(IndexingProgress),
+    InProgress(Progress),
     Idle,
 }
 
@@ -48,10 +56,14 @@ impl IndexingStatus {
         IndexingStatusChanged(new_status.clone()).emit_all(&self.app_handle)
     }
 
-    pub async fn set_preindexing_start(&self, total: u32) -> tauri::Result<()> {
-        let new_status = Status::PreIndexing(PreIndexingProgress {
+    pub async fn set_preindexing_started(&self, total: u32) -> tauri::Result<()> {
+        let new_status = Status::InProgress(Progress {
             total,
-            preindexed: 0,
+            indexing: None,
+            preindexing: PreIndexingProgress {
+                started_preindexing: Utc::now(),
+                preindexed: 0,
+            },
         });
         *self.status.write().await.deref_mut() = new_status.clone();
         IndexingStatusChanged(new_status.clone()).emit_all(&self.app_handle)
@@ -59,16 +71,16 @@ impl IndexingStatus {
 
     pub async fn increment_preindexed(&self) -> Result<(), String> {
         let mut status = self.status.write().await;
-        if let Status::PreIndexing(progress) = status.deref_mut() {
-            progress.preindexed += 1;
-            // Only emit update on the percentiles
+        if let Status::InProgress(progress) = status.deref_mut() {
+            progress.preindexing.preindexed += 1;
             trace!(
-                "preindexed: {}, total: {}, percent: {}",
-                progress.preindexed,
+                "indexed: {}, total: {}, percent: {}",
+                progress.preindexing.preindexed,
                 progress.total,
-                progress.preindexed % (progress.total / 100)
+                progress.preindexing.preindexed % (progress.total / 100)
             );
-            if progress.preindexed % (progress.total / 100) == 0 {
+            // Only emit update on the percentiles
+            if progress.preindexing.preindexed % (progress.total / 100) == 0 {
                 IndexingStatusChanged(status.clone())
                     .emit_all(&self.app_handle)
                     .map_err(|err| err.to_string())
@@ -77,37 +89,51 @@ impl IndexingStatus {
             }
         } else {
             // TODO: could put this guard rail at the type level
-            Err("Cannot increment preindexed if not preindexing".to_string())
+            Err("Cannot increment preindex if not in progress".to_string())
         }
     }
 
-    pub async fn set_indexing_started(&self, total: u32) -> tauri::Result<()> {
-        let new_status = Status::Indexing(IndexingProgress { total, indexed: 0 });
-        *self.status.write().await.deref_mut() = new_status.clone();
-        IndexingStatusChanged(new_status.clone()).emit_all(&self.app_handle)
+    pub async fn set_indexing_started(&self, total_to_index: u32) -> Result<(), String> {
+        let mut status = self.status.write().await;
+        if let Status::InProgress(progress) = status.deref_mut() {
+            progress.indexing = Some(IndexingProgress {
+                started_indexing: Utc::now(),
+                newly_indexed: 0,
+                total_to_index,
+            });
+            IndexingStatusChanged(status.clone())
+                .emit_all(&self.app_handle)
+                .map_err(|err| err.to_string())
+        } else {
+            Err("Cannot set indexing started if not indexing".to_string())
+        }
     }
 
     pub async fn increment_indexed(&self) -> Result<(), String> {
         let mut status = self.status.write().await;
-        if let Status::Indexing(progress) = status.deref_mut() {
-            progress.indexed += 1;
-            trace!(
-                "indexed: {}, total: {}, percent: {}",
-                progress.indexed,
-                progress.total,
-                progress.indexed % (progress.total / 100)
-            );
-            // Only emit update on the percentiles
-            if progress.indexed % (progress.total / 100) == 0 {
-                IndexingStatusChanged(status.clone())
-                    .emit_all(&self.app_handle)
-                    .map_err(|err| err.to_string())
+        // If we're indexing, increment the number of indexed files
+        if let Status::InProgress(progress) = status.deref_mut() {
+            if let Some(indexing_progress) = &mut progress.indexing {
+                indexing_progress.newly_indexed += 1;
+                trace!(
+                    "indexed: {}, total: {}, percent: {}",
+                    indexing_progress.newly_indexed,
+                    indexing_progress.total_to_index,
+                    indexing_progress.newly_indexed % (indexing_progress.total_to_index / 100)
+                );
+                // Only emit update on the percentiles
+                if indexing_progress.newly_indexed % (indexing_progress.total_to_index / 100) == 0 {
+                    IndexingStatusChanged(status.clone())
+                        .emit_all(&self.app_handle)
+                        .map_err(|err| err.to_string())
+                } else {
+                    Ok(())
+                }
             } else {
-                Ok(())
+                Err("Cannot increment indexed if not indexing".to_string())
             }
         } else {
-            // TODO: could put this guard rail at the type level
-            Err("Cannot increment indexed if not indexing".to_string())
+            Err("Cannot increment indexed if not in progress".to_string())
         }
     }
 

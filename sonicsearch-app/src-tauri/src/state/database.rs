@@ -8,14 +8,9 @@ use sqlx::{
 };
 use tauri::AppHandle;
 
-use self::vector_index::VectorIndex;
-
 pub mod vector_index;
 
-pub async fn initialize_database(
-    app_handle: &AppHandle,
-    vector_index: &mut VectorIndex,
-) -> Result<SqlitePool> {
+pub async fn initialize_database(app_handle: &AppHandle) -> Result<SqlitePool> {
     info!("Setting up database...");
 
     let app_dir = app_handle
@@ -44,10 +39,6 @@ pub async fn initialize_database(
         .run(&pool)
         .await
         .context("Error during migration")?;
-
-    vector_index::synchronize_index(&pool, vector_index)
-        .await
-        .context("Failed to synchronize virtual table")?;
 
     info!("SonicSearch.db created and initialized.");
 

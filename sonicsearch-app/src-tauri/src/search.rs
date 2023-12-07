@@ -14,6 +14,7 @@ use crate::state::{
 };
 
 #[tauri::command]
+#[specta::specta]
 pub async fn search_index(
     app_state: tauri::State<'_, AppState>,
     app_handle: AppHandle,
