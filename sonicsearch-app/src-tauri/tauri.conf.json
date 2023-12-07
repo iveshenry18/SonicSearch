@@ -58,7 +58,13 @@
       ],
       "resources": [
         "onnx_models/*"
-      ]
+      ],
+      "macOS": {
+        "frameworks": [
+          "./libs/libonnxruntime.dylib",
+          "./libs/libomp.dylib"
+        ]
+      }
     },
     "security": {
       "csp": "default-src: 'self' asset: https://asset.localhost; media-src 'self' asset: https://asset.localhost"

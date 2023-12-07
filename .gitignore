@@ -2,3 +2,4 @@
 sonicsearch-app/.DS_Store
 env_vars.local.sh
 sonicsearch-app/src-tauri/.DS_Store
+/.DS_Store
