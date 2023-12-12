@@ -1,0 +1,16 @@
+- [ ] Compile for other targets (Mac Universal Binary, Windows)
+- [ ] Ensure search parity with Python version
+- [ ] Index other file types
+    - [ ] mp3
+    - [ ] m4a
+    - [ ] aiff
+- [ ] Add index cancelling
+- [ ] Speed up "Initializing"
+    - [ ] Store HNSW results
+- [ ] Speed up "Preparing"
+    - [ ] Match already-indexed files faster (using paths + header before hashing)
+    - [ ] Disable search bar while Preparing
+- [ ] Improve directory selector
+    - [ ] Clean up UI
+    - [ ] Prevent redundancy
+- [ ] Improve accessibility
