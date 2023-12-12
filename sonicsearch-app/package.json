@@ -10,6 +10,7 @@
     "serve": "vite preview",
     "pretauri": "bun run configure-env",
     "tauri": "tauri",
+    "tauri:release": "CI=true tauri build --release",
     "flamegraph:release": "flamegraph -o ./src-tauri/target/flamegraph.svg --root -- ./src-tauri/target/release/SonicSearch"
   },
   "license": "MIT",
