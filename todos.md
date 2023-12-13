@@ -1,4 +1,8 @@
 BUGS:
+- [ ] Horizontal scroll in Settings :/
+    - Adrianne & Daniel, when loading and when hovering over chosen directories
+- [ ] Audio playback Errors (ungracefully) sometimes
+    - Adrianne: was a Google Drive folder with little lock icons(?)
 - [x] "Preparing" hangs
     - Adrianne & Daniel
     - Was a divide-by-zero (idiot!)
