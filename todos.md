@@ -1,6 +1,7 @@
 BUG:
-- [ ] Indexing hangs
-    - Adrianne
+- [x] Indexing hangs
+    - Adrianne & Daniel
+    - Was a divide-by-zero (idiot!)
 
 ENHANCEMENTS: 
 - [ ] Compile for other targets (Mac Universal Binary, Windows)
