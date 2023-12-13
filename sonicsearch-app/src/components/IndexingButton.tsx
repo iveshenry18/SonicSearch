@@ -55,6 +55,7 @@ function secondsToString(seconds: number): string | null {
     ? trimLeadingZero(datestring.slice(14, 16)) + " minutes"
     : trimLeadingZero(datestring.slice(17, 19)) + " seconds";
 }
+
 function getSubtitleText(): string | null {
   const status = indexingStatus();
   if (status === "Idle" || status === "Started") {
@@ -62,7 +63,7 @@ function getSubtitleText(): string | null {
   } else if (status.InProgress.indexing === null) {
     return "This shouldn't take long";
   } else if (status.InProgress.indexing !== null) {
-    const defaultText = "Calculating time remaining..."
+    const defaultText = "Calculating time remaining...";
     // Avoid overpromising:
     // wait until at least some of the index has been processed to estimate
     if (
@@ -74,7 +75,13 @@ function getSubtitleText(): string | null {
     const { indexing } = status.InProgress;
     const secondsElapsed =
       (Date.now() - Date.parse(indexing.started_indexing)) / 1000;
+    if (secondsElapsed === 0) {
+      return defaultText;
+    }
     const indexedPerSecond = indexing.newly_indexed / secondsElapsed;
+    if (indexedPerSecond === 0) {
+      return defaultText;
+    }
     const estimatedSecondsRemaining =
       (indexing.total_to_index - indexing.newly_indexed) / indexedPerSecond;
     const timeText = secondsToString(estimatedSecondsRemaining);

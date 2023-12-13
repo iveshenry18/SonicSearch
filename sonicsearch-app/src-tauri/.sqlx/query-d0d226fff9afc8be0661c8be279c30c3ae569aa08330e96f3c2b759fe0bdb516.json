@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "\n            SELECT\n                af.file_path,\n                afs.starting_timestamp\n            FROM audio_file_segment afs \n                JOIN audio_file af ON afs.file_hash = af.file_hash\n            WHERE afs.rowid == ?\n            ",
+  "describe": {
+    "columns": [
+      {
+        "name": "file_path",
+        "ordinal": 0,
+        "type_info": "Text"
+      },
+      {
+        "name": "starting_timestamp",
+        "ordinal": 1,
+        "type_info": "Float"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "d0d226fff9afc8be0661c8be279c30c3ae569aa08330e96f3c2b759fe0bdb516"
+}

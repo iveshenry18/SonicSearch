@@ -74,19 +74,13 @@ impl IndexingStatus {
         if let Status::InProgress(progress) = status.deref_mut() {
             progress.preindexing.preindexed += 1;
             trace!(
-                "indexed: {}, total: {}, percent: {}",
+                "indexed: {}, total: {}",
                 progress.preindexing.preindexed,
                 progress.total,
-                progress.preindexing.preindexed % (progress.total / 100)
             );
-            // Only emit update on the percentiles
-            if progress.preindexing.preindexed % (progress.total / 100) == 0 {
-                IndexingStatusChanged(status.clone())
-                    .emit_all(&self.app_handle)
-                    .map_err(|err| err.to_string())
-            } else {
-                Ok(())
-            }
+            IndexingStatusChanged(status.clone())
+                .emit_all(&self.app_handle)
+                .map_err(|err| err.to_string())
         } else {
             // TODO: could put this guard rail at the type level
             Err("Cannot increment preindex if not in progress".to_string())
@@ -141,7 +135,7 @@ impl IndexingStatus {
     pub async fn get_status(&self) -> Status {
         self.status.read().await.clone()
     }
-    
+
     pub async fn emit_status(&self) -> tauri::Result<()> {
         IndexingStatusChanged(self.get_status().await).emit_all(&self.app_handle)
     }

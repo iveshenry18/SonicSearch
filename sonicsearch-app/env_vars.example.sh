@@ -1,14 +1,12 @@
 #! /bin/bash
-# This sets the necessary environment variables for building the application. It might only apply to my system.
+# This sets the necessary environment variables for packaging the application for distribution
 
 echo "Setting environment variables"
 
-export ORT_DYLIB_PATH='/opt/homebrew/Cellar/onnxruntime/1.16.1/lib/libonnxruntime.dylib'
-export LDFLAGS='-L/opt/homebrew/opt/llvm/lib -L/opt/homebrew/opt/libomp/lib'
-export LIBRARY_PATH="/opt/homebrew/opt/llvm/lib:/opt/homebrew/opt/libomp/lib"
-export CPPFLAGS='-I/opt/homebrew/opt/llvm/include -I/opt/homebrew/opt/libomp/include'
-export CXX='/opt/homebrew/opt/llvm/bin/clang++'
-export CC='/opt/homebrew/opt/llvm/bin/clang'
-export RUSTFLAGS='-L/opt/homebrew/opt/libomp/lib -L/opt/homebrew/opt/llvm/lib -lblas -llapack'
+# See README
+export APPLE_SIGNING_IDENTITY="<the result of `security find-identity -v -p codesigning`>"
+export APPLE_ID="<swag@icloud.gov>"
+export APPLE_PASSWORD="<app-specific password>"
+export APPLE_TEAM_ID="<team ID, found in Apple Developer dashboard>"
 
 echo "Environment variables set"

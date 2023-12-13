@@ -1,3 +1,8 @@
+BUG:
+- [ ] Indexing hangs
+    - Adrianne
+
+ENHANCEMENTS: 
 - [ ] Compile for other targets (Mac Universal Binary, Windows)
 - [ ] Ensure search parity with Python version
 - [ ] Index other file types

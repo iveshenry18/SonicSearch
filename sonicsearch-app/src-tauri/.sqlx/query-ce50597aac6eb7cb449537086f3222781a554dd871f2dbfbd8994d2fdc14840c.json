@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "\n        SELECT\n            audio_file_segment.rowid,\n            audio_file_segment.embedding\n        FROM audio_file_segment\n        WHERE audio_file_segment.embedding IS NOT NULL\n        AND audio_file_segment.rowid IS NOT NULL\n        ",
+  "describe": {
+    "columns": [
+      {
+        "name": "rowid",
+        "ordinal": 0,
+        "type_info": "Int64"
+      },
+      {
+        "name": "embedding",
+        "ordinal": 1,
+        "type_info": "Blob"
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "ce50597aac6eb7cb449537086f3222781a554dd871f2dbfbd8994d2fdc14840c"
+}
