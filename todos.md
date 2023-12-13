@@ -1,4 +1,4 @@
-BUG:
+BUGS:
 - [x] "Preparing" hangs
     - Adrianne & Daniel
     - Was a divide-by-zero (idiot!)
